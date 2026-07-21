@@ -7,3 +7,4 @@ uvicorn[standard]>=0.29
 apscheduler>=3.10,<4
 pyyaml>=6.0
 musicdl>=2.13.0
+qrcode>=7.4

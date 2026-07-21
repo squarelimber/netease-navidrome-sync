@@ -11,6 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 from . import config as config_mod
 from .db import DB
 from .jobs import Jobs
+from .netease.qrlogin import QRLoginHandler
 from .util import setup_logging
 from .web import create_app
 
@@ -51,6 +52,7 @@ def main():
         threading.Thread(target=jobs.daily_run, daemon=True, name="startup-run").start()
 
     app = create_app(cfg, db, jobs, scheduler)
+    app.state.qr_handler = QRLoginHandler(on_success=jobs.set_cookie)
     uvicorn.run(app, host=cfg.web_host, port=cfg.web_port, log_level="warning")
 
 
