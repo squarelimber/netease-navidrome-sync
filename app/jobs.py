@@ -44,6 +44,20 @@ class Jobs:
         self.ncm_limiter = RateLimiter(0.5)
         self._lock = threading.Lock()
         self.last_cookie_ok: bool | None = None
+        self._abort = threading.Event()
+        self.aborted = False
+
+    def stop(self):
+        """请求中止正在运行的每日任务（下一首曲目前停止）。"""
+        self._abort.set()
+
+    def set_cookie(self, cookie: str):
+        """热更新网易云 Cookie 并持久化到 cookie 文件。"""
+        self.ncm.update_cookie(cookie)
+        try:
+            (self.cfg.data_dir / "cookie.txt").write_text(cookie, encoding="utf-8")
+        except Exception as e:
+            log.warning("写入 cookie 文件失败: %s", e)
 
     # ---------- 推荐源 ----------
 
@@ -217,6 +231,8 @@ class Jobs:
         started = time.time()
         try:
             log.info("========== 每日同步开始 ==========")
+            self._abort.clear()
+            self.aborted = False
             self.last_cookie_ok = self.ncm.check_cookie()
             stats["cookie_ok"] = self.last_cookie_ok
             if not self.last_cookie_ok:
@@ -229,6 +245,10 @@ class Jobs:
             if due:
                 log.info("处理重试队列: %d 首", len(due))
             for row in due:
+                if self._abort.is_set():
+                    self.aborted = True
+                    log.warning("收到中止信号，停止重试队列处理")
+                    break
                 track = Track(title=row["title"], artists=json.loads(row["artists"]),
                               album=row["album"], ncm_id=row["ncm_id"],
                               origin=row["origin"], playlist=row["playlist"])
@@ -288,6 +308,10 @@ class Jobs:
 
             # 4. 下载处理
             for t in pending_sync + capped:
+                if self._abort.is_set():
+                    self.aborted = True
+                    log.warning("收到中止信号，停止下载处理")
+                    break
                 result = self._process_one(t, positions.get((t.playlist, track_key(t.artists, t.title)), 0))
                 stats[result] = stats.get(result, 0) + 1
                 if result in ("downloaded", "existed", "skipped"):

@@ -42,6 +42,11 @@ class NCMApi:
         )
         self.timeout = timeout
 
+    def update_cookie(self, cookie: str):
+        """运行时更新 Cookie（如扫码登录后）。"""
+        self.cookie = cookie
+        self.session.headers["Cookie"] = cookie
+
     # ---------- 底层 ----------
 
     @property
