@@ -1,0 +1,23 @@
+# 环境与缓存
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 敏感数据与本地状态（绝不提交）
+data/
+config.yaml
+cookie.txt
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.pkl
+
+# 下载产物
+tmp_dl/
+
+# 系统
+.DS_Store
+Thumbs.db

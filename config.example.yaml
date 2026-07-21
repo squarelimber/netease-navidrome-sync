@@ -1,0 +1,69 @@
+# ============ 基础配置 ============
+# 容器内音乐目录（与 Navidrome 挂载的同一目录）
+music_dir: /music
+# 容器内数据目录（SQLite、日志、临时下载）
+data_dir: /app/data
+
+# ============ Navidrome（用于查重，可选）============
+# 不配置则跳过"曲库已存在"检查，仅靠本地 SQLite 记录去重
+navidrome:
+  url: ""            # 例: http://192.168.1.10:4533
+  username: ""
+  password: ""
+
+# ============ 网易云 ============
+netease:
+  # 将你的网易云 Cookie 整串写入 data 目录下的 cookie.txt（F12 从 music.163.com 请求头复制）
+  # 必须包含 MUSIC_U 才能用日推/完整歌单
+  cookie_file: /app/data/cookie.txt
+
+# ============ 推荐来源 ============
+sources:
+  # 网易云每日推荐（需 Cookie，30首/天）
+  netease_daily:
+    enabled: true
+
+  # 网易云指定歌单同步（含"我喜欢的音乐"——它是一个歌单，填其 ID 即可）
+  netease_playlists:
+    enabled: true
+    playlists: []
+    #  - name: 我喜欢的音乐
+    #    id: 123456789
+
+  # ListenBrainz 推荐（CF 推荐 + 官方每周歌单），填用户名即可，无需 token
+  listenbrainz:
+    enabled: false
+    username: ""
+
+  # Last.fm 派生推荐（近期常听/最爱 -> 相似歌曲）
+  lastfm:
+    enabled: false
+    api_key: ""
+    username: ""
+
+# 每日最多新增的"推荐类"曲目数（歌单同步不受此限制）
+discover_daily_limit: 40
+
+# ============ 下载 ============
+download:
+  # musicdl 下载源优先级链（按顺序尝试）。可选:
+  #   netease / kuwo / migu / bodian / qq / kugou / qianqian
+  sources: [netease, kuwo, migu, bodian, qq]
+  # 两次下载之间的间隔秒数，避免触发风控
+  interval_seconds: 2.0
+  # 匹配校验：标题相似度阈值(0-100)
+  title_threshold: 85
+  # 匹配校验：允许的最大时长差(秒)
+  max_duration_diff: 12
+
+# ============ 调度 ============
+schedule:
+  # cron 表达式，默认每天 04:30（日推 0 点后刷新）
+  cron: "30 4 * * *"
+  # 容器启动时是否立即跑一次
+  run_on_startup: false
+
+# ============ 状态页 ============
+web:
+  host: 0.0.0.0
+  port: 8678
