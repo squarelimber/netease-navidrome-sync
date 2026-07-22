@@ -103,6 +103,7 @@ PAGE = """<!DOCTYPE html>
       <button onclick="qrStart()">显示二维码</button>
       <div id="qr-img"></div>
       <div class="qr-tip" id="qr-tip"></div>
+      <div id="qr-debug" class="muted" style="font-size:11px;margin-top:4px;word-break:break-all"></div>
     </div>
   </div>
 </div>
@@ -228,6 +229,9 @@ async function qrStart() {
 async function qrPoll(key) {
   const r = await (await fetch('/api/qr/poll?key='+encodeURIComponent(key))).json();
   const tip = document.getElementById('qr-tip');
+  const debug = document.getElementById('qr-debug');
+  if (r.raw) debug.textContent = '回应: ' + JSON.stringify(r.raw);
+  else debug.textContent = '';
   if (r.status === 801) tip.innerHTML = '等待扫码…';
   else if (r.status === 802) tip.innerHTML = '<span class="warn">已扫码，请在手机确认登录</span>';
   else if (r.status === 803) {
@@ -236,6 +240,8 @@ async function qrPoll(key) {
   } else if (r.status === 800) {
     tip.innerHTML = '<span class="bad">二维码已过期，请重新生成</span>';
     clearInterval(qrTimer); qrTimer = null;
+  } else {
+    tip.innerHTML = '<span class="bad">未知状态 ('+r.status+')</span>';
   }
 }
 

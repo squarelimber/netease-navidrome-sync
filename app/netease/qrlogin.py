@@ -5,7 +5,7 @@
 2. 生成二维码 SVG（扫码内容：https://music.163.com/login?codekey=<unikey>）
 3. 轮询 /weapi/login/qrcode/client/login（复用同一 Session）
    - 800 过期 / 801 等待扫码 / 802 已扫码待确认 / 803 确认登录
-4. 803 返回时从响应头解析 Set-Cookie 提取登录态 Cookie
+4. 803 返回时先从 JSON 响应体取 cookie 字段，再回退到 Set-Cookie 头
 5. 通过 on_success 回调热更新 Jobs 的 NCMApi 并持久化
 """
 
@@ -25,7 +25,6 @@ _qr_sessions: dict[str, dict] = {}
 
 
 def _gen_qr_svg(text: str) -> str:
-    """生成二维码 SVG 矢量图（无需 Pillow）。"""
     try:
         import qrcode
         from io import BytesIO
@@ -42,11 +41,9 @@ def _gen_qr_svg(text: str) -> str:
 
 
 def _extract_set_cookie(resp: requests.Response) -> str:
-    """从响应中提取所有 Set-Cookie 并拼接成 Cookie 串。"""
     parts = []
     for k, v in resp.headers.items():
         if k.lower() == "set-cookie":
-            # Set-Cookie: MUSIC_U=xxxx; Path=/; ...
             kv = v.split(";")[0] if ";" in v else v
             if "=" in kv:
                 parts.append(kv)
@@ -61,7 +58,7 @@ class QRLoginHandler:
         session = requests.Session()
         session.headers.update({"User-Agent": UA, "Referer": "https://music.163.com/"})
         try:
-            data = encrypt({"noCookie": True, "type": 1})
+            data = encrypt({"type": 1})
             r = session.post(
                 "https://music.163.com/weapi/login/qrcode/unikey",
                 data=data, timeout=15,
@@ -93,15 +90,31 @@ class QRLoginHandler:
             )
             j = r.json()
         except Exception as e:
-            return {"status": 0, "msg": str(e)}
+            return {"status": 0, "msg": str(e), "raw": f"请求异常: {e}"}
 
         code = j.get("code", 0)
+
         if code == 803:
-            cookie = _extract_set_cookie(r)
+            # 优先从 JSON 体取 cookie（非加密接口走 Set-Cookie 头，weapi 接口可能在 body 里）
+            cookie = (j.get("cookie") or "").strip()
+            # 回退：从 Set-Cookie 响应头取
+            if not cookie:
+                cookie = _extract_set_cookie(r)
             if cookie:
                 self.on_success(cookie)
                 _qr_sessions.pop(key, None)
-            return {"status": 803, "ok": bool(cookie)}
-        if code in (800, 801, 802):
-            return {"status": code}
-        return {"status": code, "msg": j.get("message", "")}
+                log.info("扫码登录成功，Cookie 已更新（%d bytes）", len(cookie))
+            else:
+                log.warning("扫码登录 803 但未收到 Cookie，raw=%s", j)
+            return {
+                "status": 803,
+                "ok": bool(cookie),
+                "raw": {"code": 803, "got_cookie": bool(cookie)},
+            }
+
+        result = {"status": code}
+        msg = j.get("message")
+        if msg:
+            result["msg"] = msg
+        result["raw"] = j
+        return result
