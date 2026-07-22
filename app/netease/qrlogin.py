@@ -1,11 +1,12 @@
 """网易云手机扫码登录。
 
 流程：
-1. weapi 申请 unikey
+1. weapi 申请 unikey（通过持久 Session，让服务端建立临时追踪）
 2. 生成二维码 SVG（扫码内容：https://music.163.com/login?codekey=<unikey>）
-3. 轮询 /weapi/login/qrcode/client/login
-   - 800 过期 / 801 等待扫码 / 802 已扫码待确认 / 803 确认登录（返回 Set-Cookie）
-4. 成功后把 Cookie 写入 data/cookie.txt 并热更新 Jobs 的 NCMApi
+3. 轮询 /weapi/login/qrcode/client/login（复用同一 Session）
+   - 800 过期 / 801 等待扫码 / 802 已扫码待确认 / 803 确认登录
+4. 803 返回时从响应头解析 Set-Cookie 提取登录态 Cookie
+5. 通过 on_success 回调热更新 Jobs 的 NCMApi 并持久化
 """
 
 import logging
@@ -20,7 +21,7 @@ log = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 QR_CONTENT = "https://music.163.com/login?codekey={key}"
-_qr_sessions = {}  # key -> (unikey, created_at)
+_qr_sessions: dict[str, dict] = {}
 
 
 def _gen_qr_svg(text: str) -> str:
@@ -40,17 +41,30 @@ def _gen_qr_svg(text: str) -> str:
         return ""
 
 
+def _extract_set_cookie(resp: requests.Response) -> str:
+    """从响应中提取所有 Set-Cookie 并拼接成 Cookie 串。"""
+    parts = []
+    for k, v in resp.headers.items():
+        if k.lower() == "set-cookie":
+            # Set-Cookie: MUSIC_U=xxxx; Path=/; ...
+            kv = v.split(";")[0] if ";" in v else v
+            if "=" in kv:
+                parts.append(kv)
+    return "; ".join(parts)
+
+
 class QRLoginHandler:
     def __init__(self, on_success: Callable[[str], None]):
         self.on_success = on_success
 
     def start(self) -> dict:
+        session = requests.Session()
+        session.headers.update({"User-Agent": UA, "Referer": "https://music.163.com/"})
         try:
             data = encrypt({"noCookie": True, "type": 1})
-            r = requests.post(
+            r = session.post(
                 "https://music.163.com/weapi/login/qrcode/unikey",
-                data=data, headers={"User-Agent": UA, "Referer": "https://music.163.com"},
-                timeout=15,
+                data=data, timeout=15,
             )
             j = r.json()
             if j.get("code") != 200 or not j.get("unikey"):
@@ -58,33 +72,32 @@ class QRLoginHandler:
             key = j["unikey"]
         except Exception as e:
             return {"ok": False, "msg": f"请求失败: {e}"}
-        _qr_sessions[key] = (key, time.time())
+        _qr_sessions[key] = {"session": session, "t": time.time()}
         svg = _gen_qr_svg(QR_CONTENT.format(key=key))
         if not svg:
             return {"ok": False, "msg": "二维码生成失败（缺少 qrcode 库？）"}
         return {"ok": True, "key": key, "svg": svg}
 
     def poll(self, key: str) -> dict:
-        sess = _qr_sessions.get(key)
-        if not sess:
+        meta = _qr_sessions.get(key)
+        if not meta:
             return {"status": 800}
+        session = meta["session"]
         try:
             data = encrypt({"key": key, "type": 1})
-            r = requests.post(
+            r = session.post(
                 "https://music.163.com/weapi/login/qrcode/client/login",
-                data=data, headers={"User-Agent": UA, "Referer": "https://music.163.com"},
+                data=data,
+                headers={"Referer": "https://music.163.com/"},
                 timeout=15,
             )
             j = r.json()
         except Exception as e:
             return {"status": 0, "msg": str(e)}
+
         code = j.get("code", 0)
         if code == 803:
-            # 成功登录：从响应头抓取 Set-Cookie 拼成 cookie 串
-            cookie = "; ".join(
-                f"{k}={v.split(';')[0].split('=', 1)[1]}"
-                for k, v in r.headers.items() if k.lower() == "set-cookie" and "=" in v.split(';')[0]
-            )
+            cookie = _extract_set_cookie(r)
             if cookie:
                 self.on_success(cookie)
                 _qr_sessions.pop(key, None)
