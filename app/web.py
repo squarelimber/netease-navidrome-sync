@@ -4,7 +4,7 @@ import json
 import logging
 import threading
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 log = logging.getLogger(__name__)
@@ -74,6 +74,15 @@ PAGE = """<!DOCTYPE html>
   .qr-box img, .qr-box svg { max-width:220px; border-radius:8px; background:#fff; padding:8px; }
   .qr-tip { font-size:12px; color:var(--muted); margin-top:8px; }
   .hide { display:none; }
+  .input { background:#0f1a33; border:1px solid var(--line); border-radius:8px; padding:9px 12px;
+           color:#fff; font-size:13px; width:100%; margin-bottom:8px; }
+  .input::placeholder { color:#5a6a88; }
+  .input-group { margin-bottom:6px; }
+  .input-group label { display:block; font-size:12px; color:var(--muted); margin-bottom:3px; }
+  .login-tab { display:flex; gap:0; margin-bottom:12px; }
+  .login-tab button { flex:1; background:transparent; color:var(--muted); font-size:13px;
+                      padding:8px; border-radius:0; border-bottom:2px solid transparent; }
+  .login-tab button.active { color:#fff; border-bottom-color:var(--accent); }
 </style>
 </head>
 <body>
@@ -97,12 +106,22 @@ PAGE = """<!DOCTYPE html>
     <div class="row" id="stats"></div>
   </div>
 
-  <div class="card">
-    <h2>网易云扫码登录</h2>
-    <div class="qr-box" id="qr-box">
+  <div class="card" id="login-card">
+    <h2>网易云登录</h2>
+    <div class="login-tab">
+      <button id="tab-phone" class="active" onclick="switchLoginTab('phone')">手机号登录</button>
+      <button id="tab-qr" onclick="switchLoginTab('qr')">扫码登录(备用)</button>
+    </div>
+    <div id="login-phone">
+      <div class="input-group"><label>手机号</label><input id="login-phone-input" class="input" placeholder="13800138000" type="tel"></div>
+      <div class="input-group"><label>密码</label><input id="login-pwd-input" class="input" placeholder="" type="password" onkeydown="if(event.key==='Enter')phoneLogin()"></div>
+      <button onclick="phoneLogin()" style="width:100%">登录</button>
+      <div id="login-phone-status" class="qr-tip"></div>
+    </div>
+    <div id="login-qr" class="hide qr-box">
       <button onclick="qrStart()">显示二维码</button>
       <div id="qr-img"></div>
-      <div class="qr-tip" id="qr-tip"></div>
+      <div class="qr-tip" id="qr-tip">扫码接口可能已被封锁</div>
       <div id="qr-debug" class="muted" style="font-size:11px;margin-top:4px;word-break:break-all"></div>
     </div>
   </div>
@@ -222,7 +241,7 @@ async function qrStart() {
   const r = await (await fetch('/api/qr/start')).json();
   if (!r.ok) { document.getElementById('qr-tip').innerHTML = '<span class="bad">'+r.msg+'</span>'; return; }
   document.getElementById('qr-img').innerHTML = r.svg;
-  document.getElementById('qr-tip').innerHTML = '请用 <b>网易云音乐 App</b> 扫码登录';
+  document.getElementById('qr-tip').innerHTML = '请用 <b>网易云音乐 App</b> 扫码<br><small class="muted">如提示升级版本，请改用手机号登录</small>';
   if (qrTimer) clearInterval(qrTimer);
   qrTimer = setInterval(() => qrPoll(r.key), 2000);
 }
@@ -241,8 +260,28 @@ async function qrPoll(key) {
     tip.innerHTML = '<span class="bad">二维码已过期，请重新生成</span>';
     clearInterval(qrTimer); qrTimer = null;
   } else {
-    tip.innerHTML = '<span class="bad">未知状态 ('+r.status+')</span>';
+    tip.innerHTML = '<span class="bad">扫码不可用 ('+r.status+')</span>';
   }
+}
+function switchLoginTab(tab) {
+  document.getElementById('login-phone').classList.toggle('hide', tab !== 'phone');
+  document.getElementById('login-qr').classList.toggle('hide', tab !== 'qr');
+  document.getElementById('tab-phone').classList.toggle('active', tab === 'phone');
+  document.getElementById('tab-qr').classList.toggle('active', tab === 'qr');
+}
+async function phoneLogin() {
+  const phone = document.getElementById('login-phone-input').value.trim();
+  const pwd = document.getElementById('login-pwd-input').value;
+  const status = document.getElementById('login-phone-status');
+  if (!phone || !pwd) { status.innerHTML = '<span class="bad">请输入手机号和密码</span>'; return; }
+  status.innerHTML = '登录中…';
+  const r = await (await fetch('/api/login/phone', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({phone, password: pwd})})).json();
+  status.innerHTML = r.ok
+    ? '<span class="ok">✓ 登录成功，Cookie 已更新</span>'
+    : '<span class="bad">✗ ' + (r.msg || '登录失败') + '</span>';
+  if (r.ok) { document.getElementById('login-phone-input').value = ''; document.getElementById('login-pwd-input').value = ''; load(); }
+  if (r.raw) status.innerHTML += '<div class="muted" style="font-size:11px">' + JSON.stringify(r.raw).substring(0,200) + '</div>';
 }
 
 load();
@@ -323,19 +362,27 @@ def create_app(cfg, db, jobs, scheduler=None):
         db.reset_retry(track_id)
         return {"ok": True}
 
-    # 网易云扫码登录端点（占位，由 jobs/qr 模块注入）
+    # 网易云登录端点（由 LoginHandler 注入）
     @app.get("/api/qr/start")
     def qr_start():
         handler = getattr(app.state, "qr_handler", None)
         if not handler:
-            return {"ok": False, "msg": "扫码登录未启用"}
-        return handler.start()
+            return {"ok": False, "msg": "登录模块未初始化"}
+        return handler.qr_start()
 
     @app.get("/api/qr/poll")
     def qr_poll(key: str):
         handler = getattr(app.state, "qr_handler", None)
         if not handler:
             return {"ok": False, "status": 0}
-        return handler.poll(key)
+        return handler.qr_poll(key)
+
+    @app.post("/api/login/phone")
+    async def phone_login(req: Request):
+        handler = getattr(app.state, "qr_handler", None)
+        if not handler:
+            return {"ok": False, "msg": "登录模块未初始化"}
+        body = await req.json()
+        return handler.phone_login(str(body.get("phone", "")), str(body.get("password", "")))
 
     return app
