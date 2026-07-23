@@ -1,7 +1,25 @@
 services:
+  ncm-api:
+    image: moefurina/ncm-api:latest
+    container_name: ncm-api
+    environment:
+      - ENABLE_GENERAL_UNBLOCK=true
+      - ENABLE_FLAC=true
+      - http_proxy=
+      - https_proxy=
+      - no_proxy=
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   navidrome-sync:
     build: .
     container_name: navidrome-sync
+    depends_on:
+      - ncm-api
     environment:
       - TZ=Asia/Shanghai
     volumes:

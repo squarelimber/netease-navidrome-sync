@@ -9,6 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from . import config as config_mod
+from .api_client import NCMAPIClient
 from .db import DB
 from .jobs import Jobs
 from .netease.qrlogin import LoginHandler
@@ -52,7 +53,10 @@ def main():
         threading.Thread(target=jobs.daily_run, daemon=True, name="startup-run").start()
 
     app = create_app(cfg, db, jobs, scheduler)
-    app.state.qr_handler = LoginHandler(on_success=jobs.set_cookie)
+    app.state.qr_handler = LoginHandler(api=jobs.ncm, on_success=jobs.set_cookie)
+    app.state.ncm_client = jobs.ncm
+    app.state.jobs = jobs
+    app.state.cfg = cfg
     uvicorn.run(app, host=cfg.web_host, port=cfg.web_port, log_level="warning")
 
 

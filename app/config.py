@@ -35,11 +35,14 @@ class Config:
     music_dir: Path
     data_dir: Path
     navidrome: NavidromeCfg
+    ncm_api_url: str
     netease_cookie: str
     sources: dict  # name -> SourceCfg
     discover_daily_limit: int
     dl_sources: list
+    dl_quality: str
     dl_interval: float
+    dl_sources_timeout: int
     title_threshold: int
     max_duration_diff: int
     cron: str
@@ -95,11 +98,14 @@ def load() -> Config:
         music_dir=music_dir,
         data_dir=data_dir,
         navidrome=navidrome,
+        ncm_api_url=str(raw.get("ncm_api_url", "http://ncm-api:3000")),
         netease_cookie=cookie,
         sources=sources,
         discover_daily_limit=int(raw.get("discover_daily_limit", 40)),
         dl_sources=list(dl.get("sources", ["netease", "kuwo", "migu", "bodian", "qq"])),
+        dl_quality=str(dl.get("quality", "lossless")),
         dl_interval=float(dl.get("interval_seconds", 2.0)),
+        dl_sources_timeout=int(dl.get("timeout", 120)),
         title_threshold=int(dl.get("title_threshold", 85)),
         max_duration_diff=int(dl.get("max_duration_diff", 12)),
         cron=str(sch.get("cron", "30 4 * * *")),

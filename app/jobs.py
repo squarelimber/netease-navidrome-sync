@@ -7,12 +7,14 @@ import threading
 import time
 from pathlib import Path
 
+import requests
+
 from . import matcher
 from .db import DB
 from .downloader import (DownloadError, MusicDLEngine, embed_metadata,
                          move_file, sniff_duration_ms)
 from .library import SubsonicClient, display_name, write_lrc_sidecar, write_m3u8
-from .netease import NCMApi
+from .api_client import NCMAPIClient
 from .sources.base import Track
 from .sources.lastfm import LastFmSource
 from .sources.listenbrainz import ListenBrainzSource
@@ -29,7 +31,9 @@ class Jobs:
     def __init__(self, cfg, db: DB):
         self.cfg = cfg
         self.db = db
-        self.ncm = NCMApi(cfg.netease_cookie)
+        self.ncm = NCMAPIClient(cfg.ncm_api_url)
+        if cfg.netease_cookie:
+            self.ncm.set_cookie(cfg.netease_cookie)
         self.engine = MusicDLEngine(
             cfg.dl_sources, cfg.data_dir / "tmp_dl",
             netease_cookie=cfg.netease_cookie,
@@ -53,7 +57,7 @@ class Jobs:
 
     def set_cookie(self, cookie: str):
         """热更新网易云 Cookie 并持久化到 cookie 文件。"""
-        self.ncm.update_cookie(cookie)
+        self.ncm.set_cookie(cookie)
         try:
             (self.cfg.data_dir / "cookie.txt").write_text(cookie, encoding="utf-8")
         except Exception as e:
@@ -137,27 +141,31 @@ class Jobs:
         if track.ncm_id:
             try:
                 self.ncm_limiter.wait()
-                detail = self.ncm.get_song_detail(track.ncm_id)
-                cover_url = detail.get("pic_url") or cover_url
-                olrc, tlrc = self.ncm.get_lyrics(track.ncm_id)
+                detail = self.ncm.song_detail([track.ncm_id])
+                if detail:
+                    cover_url = detail[0].get("pic_url") or cover_url
+                olrc, tlrc = self.ncm.lyric(track.ncm_id)
                 lyrics_text = _merge_lrc(olrc, tlrc)
             except Exception as e:
                 log.debug("网易云元数据获取失败(%s): %s", track.ncm_id, e)
 
-        # 下载：先试官方免费音源，再走 musicdl 源链
+        # 下载：先试 api-enhanced 真实音源，再走 musicdl 源链
         audio_path, dl_source = None, ""
         tmp_dir = self.cfg.data_dir / "tmp_one"
         tmp_dir.mkdir(parents=True, exist_ok=True)
         if track.ncm_id:
             try:
                 self.ncm_limiter.wait()
-                content = self.ncm.get_outer_audio(track.ncm_id)
-                if content:
-                    audio_path = tmp_dir / f"{track.ncm_id}.mp3"
-                    audio_path.write_bytes(content)
-                    dl_source = "netease-free"
+                url_info = self.ncm.song_url(track.ncm_id, level=self.cfg.dl_quality)
+                if url_info and url_info.get("url"):
+                    r = requests.get(url_info["url"], timeout=self.cfg.dl_sources_timeout or 120)
+                    r.raise_for_status()
+                    ext = Path(url_info["url"].split("?")[0]).suffix or ".mp3"
+                    audio_path = tmp_dir / f"{track.ncm_id}{ext}"
+                    audio_path.write_bytes(r.content)
+                    dl_source = f"netease-{self.cfg.dl_quality}"
             except Exception as e:
-                log.debug("outer url 下载失败(%s): %s", track.ncm_id, e)
+                log.debug("api-enhanced 下载失败(%s): %s", track.ncm_id, e)
 
         if audio_path is None:
             try:

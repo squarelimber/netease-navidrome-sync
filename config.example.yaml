@@ -4,6 +4,9 @@ music_dir: /music
 # 容器内数据目录（SQLite、日志、临时下载）
 data_dir: /app/data
 
+# api-enhanced 网易云 API 后端的地址（Docker 同名网络下直接容器名）
+ncm_api_url: http://ncm-api:3000
+
 # ============ Navidrome（用于查重，可选）============
 # 不配置则跳过"曲库已存在"检查，仅靠本地 SQLite 记录去重
 navidrome:
@@ -13,8 +16,7 @@ navidrome:
 
 # ============ 网易云 ============
 netease:
-  # 将你的网易云 Cookie 整串写入 data 目录下的 cookie.txt（F12 从 music.163.com 请求头复制）
-  # 必须包含 MUSIC_U 才能用日推/完整歌单
+  # Cookie 持久化文件路径（扫码/手机号登录成功后自动写入）
   cookie_file: /app/data/cookie.txt
 
 # ============ 推荐来源 ============
@@ -49,8 +51,13 @@ download:
   # musicdl 下载源优先级链（按顺序尝试）。可选:
   #   netease / kuwo / migu / bodian / qq / kugou / qianqian
   sources: [netease, kuwo, migu, bodian, qq]
+  # 默认下载音质（api-enhanced 后端支持）
+  #   standard=128k / exhigh=320k / lossless=FLAC / hires=Hi-Res
+  quality: lossless
   # 两次下载之间的间隔秒数，避免触发风控
   interval_seconds: 2.0
+  # 下载超时（秒）
+  timeout: 120
   # 匹配校验：标题相似度阈值(0-100)
   title_threshold: 85
   # 匹配校验：允许的最大时长差(秒)

@@ -20,8 +20,8 @@ class NeteasePlaylistSource(Source):
         for pl in self.playlists:
             pid, pname = pl.get("id"), pl.get("name", str(pl.get("id")))
             try:
-                detail = self.api.get_playlist_detail(pid)
-                songs = self.api.get_song_details(detail["track_ids"])
+                detail = self.api.playlist_detail(pid)
+                songs = self.api.song_detail(detail["track_ids"])
             except Exception as e:
                 log.error("获取歌单 %s(%s) 失败: %s", pname, pid, e)
                 continue

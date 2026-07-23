@@ -106,6 +106,22 @@ PAGE = """<!DOCTYPE html>
     <div class="row" id="stats"></div>
   </div>
 
+  <div class="card">
+    <h2>搜索下载</h2>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input id="search-query" class="input" placeholder="搜歌曲、歌手…" style="flex:1" onkeydown="if(event.key==='Enter')doSearch()">
+      <select id="search-quality" class="input" style="flex:0 0 auto;width:auto;min-width:120px">
+        <option value="lossless">无损 FLAC</option>
+        <option value="exhigh">极高 320k</option>
+        <option value="standard">标准 128k</option>
+        <option value="hires">Hi-Res</option>
+      </select>
+      <button onclick="doSearch()" style="flex:0 0 auto">搜索</button>
+    </div>
+    <div id="search-status" class="muted" style="font-size:12px"></div>
+    <div class="scroll" style="max-height:420px"><table id="search-results"></table></div>
+  </div>
+
   <div class="card" id="login-card">
     <h2>网易云登录</h2>
     <div class="login-tab">
@@ -269,6 +285,35 @@ function switchLoginTab(tab) {
   document.getElementById('tab-phone').classList.toggle('active', tab === 'phone');
   document.getElementById('tab-qr').classList.toggle('active', tab === 'qr');
 }
+var searchTimer = null;
+async function doSearch() {
+  const q = document.getElementById('search-query').value.trim();
+  if (!q) return;
+  const ql = document.getElementById('search-quality').value;
+  const status = document.getElementById('search-status');
+  status.textContent = '搜索中…';
+  const r = await (await fetch('/api/search?q='+encodeURIComponent(q)+'&limit=30')).json();
+  if (r.error) { status.innerHTML = '<span class="bad">'+r.error+'</span>'; return; }
+  if (!r.length) { status.innerHTML = '无结果'; document.getElementById('search-results').innerHTML = ''; return; }
+  status.innerHTML = '找到 '+r.length+' 首';
+  document.getElementById('search-results').innerHTML =
+    '<tr><th>曲名</th><th>歌手</th><th>专辑</th><th></th></tr>' +
+    r.map(s => {
+      const artists = s.artists.join('/');
+      return `<tr><td>${s.name}</td><td class="muted">${artists}</td><td class="muted">${s.album||'-'}</td>
+        <td><button class="small" onclick="dlSong(${s.id},'${s.artists[0]||''}','${s.name.replace(/'/g,"\\'")}','${ql}')">下载</button></td></tr>`;
+    }).join('');
+}
+async function dlSong(ncmId, artist, title, quality) {
+  const status = document.getElementById('search-status');
+  status.innerHTML = '下载中: '+artist+' - '+title+' …';
+  const r = await (await fetch('/api/download', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ncm_id: ncmId, artist, title, quality})})).json();
+  status.innerHTML = r.ok
+    ? '<span class="ok">✓ 下载完成: '+r.file+'</span>'
+    : '<span class="bad">✗ 下载失败: '+(r.msg||'')+'</span>';
+  load();
+}
 async function phoneLogin() {
   const phone = document.getElementById('login-phone-input').value.trim();
   const pwd = document.getElementById('login-pwd-input').value;
@@ -384,5 +429,61 @@ def create_app(cfg, db, jobs, scheduler=None):
             return {"ok": False, "msg": "登录模块未初始化"}
         body = await req.json()
         return handler.phone_login(str(body.get("phone", "")), str(body.get("password", "")))
+
+    @app.get("/api/search")
+    def search(q: str = "", limit: int = 30):
+        ncm = getattr(app.state, "ncm_client", None)
+        if not ncm:
+            return {"error": "网易云后端未连接"}
+        try:
+            return ncm.search(q, limit)
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.post("/api/download")
+    async def download(req: Request):
+        ncm = getattr(app.state, "ncm_client", None)
+        jobs = getattr(app.state, "jobs", None)
+        if not ncm or not jobs:
+            return {"ok": False, "msg": "后端未就绪"}
+        body = await req.json()
+        ncm_id = int(body.get("ncm_id", 0))
+        quality = str(body.get("quality", "lossless"))
+        artist = str(body.get("artist", ""))
+        title = str(body.get("title", ""))
+        if not ncm_id:
+            return {"ok": False, "msg": "缺少 ncm_id"}
+        try:
+            import tempfile, requests as _req, pathlib
+            url_info = ncm.song_url(ncm_id, level=quality)
+            if not url_info or not url_info.get("url"):
+                return {"ok": False, "msg": "无法获取歌曲链接"}
+            r = _req.get(url_info["url"], timeout=120)
+            r.raise_for_status()
+            ext = pathlib.Path(url_info["url"].split("?")[0]).suffix or ".mp3"
+            tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+            tmp.write(r.content); tmp.close()
+            from .downloader import embed_metadata, move_file
+            from .util import safe_name
+            from .sources.base import Track
+            track = Track(title=title or "", artists=[artist] if artist else [],
+                          ncm_id=ncm_id, origin="manual_search", playlist="手动搜索",
+                          album=url_info.get("album",""))
+            olrc, tlrc = ncm.lyric(ncm_id)
+            from .jobs import _merge_lrc
+            lyrics_text = _merge_lrc(olrc, tlrc) if olrc else None
+            subdir = pathlib.Path("Discover")
+            fname = f"{safe_name(artist+' - '+title)}{ext}"
+            dest = pathlib.Path(cfg.music_dir) / subdir / fname
+            embed_metadata(pathlib.Path(tmp.name), track, url_info.get("cover","") or "", lyrics_text)
+            move_file(pathlib.Path(tmp.name), dest)
+            if lyrics_text:
+                from .library import write_lrc_sidecar
+                write_lrc_sidecar(dest, lyrics_text)
+            return {"ok": True, "file": str(subdir / fname)}
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"ok": False, "msg": str(e)}
 
     return app

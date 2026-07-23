@@ -15,7 +15,7 @@ class NeteaseDailySource(Source):
         self.api = ncm_api
 
     def fetch(self) -> list[Track]:
-        songs = self.api.get_daily_recommend()
+        songs = self.api.daily_recommend()
         today = datetime.date.today().isoformat()
         tracks = []
         for i, s in enumerate(songs):
