@@ -5,15 +5,7 @@ services:
     environment:
       - ENABLE_GENERAL_UNBLOCK=true
       - ENABLE_FLAC=true
-      - http_proxy=
-      - https_proxy=
-      - no_proxy=
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   navidrome-sync:
     build: .
@@ -27,6 +19,7 @@ services:
       - /path/to/your/music:/music
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
+      - ./app:/app/app
     ports:
       - "8678:8678"
     restart: unless-stopped

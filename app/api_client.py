@@ -73,7 +73,7 @@ class NCMAPIClient:
 
     def login_cellphone(self, phone: str, password: str) -> dict:
         """手机号+密码登录。成功时 raw.cookie 为完整 Cookie。"""
-        j = self._get("/login/cellphone", phone=phone, password=password)
+        j = self._post("/login/cellphone", {"phone": phone, "password": password})
         if j.get("code") == 200:
             cookie = j.get("cookie", "")
             if cookie:
