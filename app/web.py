@@ -102,22 +102,6 @@ PAGE = """<!DOCTYPE html>
     <div class="row" id="stats"></div>
   </div>
 
-  <div class="card">
-    <h2>搜索下载</h2>
-    <div style="display:flex;gap:8px;margin-bottom:10px">
-      <input id="search-query" class="input" placeholder="搜歌曲、歌手…" style="flex:1" onkeydown="if(event.key==='Enter')doSearch()">
-      <select id="search-quality" class="input" style="flex:0 0 auto;width:auto;min-width:120px">
-        <option value="lossless">无损 FLAC</option>
-        <option value="exhigh">极高 320k</option>
-        <option value="standard">标准 128k</option>
-        <option value="hires">Hi-Res</option>
-      </select>
-      <button onclick="doSearch()" style="flex:0 0 auto">搜索</button>
-    </div>
-    <div id="search-status" class="muted" style="font-size:12px"></div>
-    <div class="scroll" style="max-height:420px"><table id="search-results"></table></div>
-  </div>
-
   <div class="card" id="login-card">
     <h2>网易云扫码登录</h2>
     <div class="qr-box">
@@ -126,6 +110,17 @@ PAGE = """<!DOCTYPE html>
       <div class="qr-tip" id="qr-tip"></div>
     </div>
   </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <h2>搜索下载</h2>
+  <div style="display:flex;gap:8px;margin-bottom:10px">
+    <input id="search-query" class="input" placeholder="搜歌曲、歌手…" style="flex:1" onkeydown="if(event.key==='Enter')doSearch()">
+    <button onclick="doSearch()" style="flex:0 0 auto">搜索</button>
+  </div>
+  <div id="search-status" class="muted" style="font-size:12px"></div>
+  <div class="scroll" style="max-height:420px"><table id="search-results"></table></div>
+</div>
 </div>
 
 <div class="grid" style="margin-top:16px">
@@ -265,7 +260,6 @@ var searchTimer = null;
 async function doSearch() {
   const q = document.getElementById('search-query').value.trim();
   if (!q) return;
-  const ql = document.getElementById('search-quality').value;
   const status = document.getElementById('search-status');
   status.textContent = '搜索中…';
   const r = await (await fetch('/api/search?q='+encodeURIComponent(q)+'&limit=30')).json();
@@ -277,14 +271,15 @@ async function doSearch() {
     r.map(s => {
       const artists = s.artists.join('/');
       return `<tr><td>${s.name}</td><td class="muted">${artists}</td><td class="muted">${s.album||'-'}</td>
-        <td><button class="small" onclick="dlSong(${s.id},'${s.artists[0]||''}','${s.name.replace(/'/g,"\\'")}','${ql}')">下载</button></td></tr>`;
+        <td><button class="small" onclick="dlSong('${encodeURIComponent(s.artists[0]||'')}','${encodeURIComponent(s.name)}')">下载</button></td></tr>`;
     }).join('');
 }
-async function dlSong(ncmId, artist, title, quality) {
+async function dlSong(artist, title) {
   const status = document.getElementById('search-status');
-  status.innerHTML = '下载中: '+artist+' - '+title+' …';
+  const a = decodeURIComponent(artist), t = decodeURIComponent(title);
+  status.innerHTML = '下载中: '+a+' - '+t+' …';
   const r = await (await fetch('/api/download', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ncm_id: ncmId, artist, title, quality})})).json();
+    body: JSON.stringify({artist: a, title: t})})).json();
   status.innerHTML = r.ok
     ? '<span class="ok">✓ 下载完成: '+r.file+'</span>'
     : '<span class="bad">✗ 下载失败: '+(r.msg||'')+'</span>';
@@ -402,12 +397,11 @@ def create_app(cfg, db, jobs, scheduler=None):
         body = await req.json()
         artist = str(body.get("artist", ""))
         title = str(body.get("title", ""))
-        quality = str(body.get("quality", "lossless"))
         if not artist or not title:
             return {"ok": False, "msg": "缺少 artist/title"}
         try:
-            from tempfile import NamedTemporaryFile
-            from .downloader import embed_metadata, move_file
+            from pathlib import Path as P
+            from .downloader import (DownloadError, embed_metadata, move_file)
             from .util import safe_name, RateLimiter
             from .sources.base import Track
             from .matcher import best_match
@@ -432,9 +426,9 @@ def create_app(cfg, db, jobs, scheduler=None):
             # 下载
             audio_path, dl_source = engine.download(track)
             ext = audio_path.suffix.lower()
-            subdir = pathlib.Path("Discover")
+            subdir = P("Discover")
             fname = f"{safe_name(' - '.join(track.artists) + ' - ' + track.title)}{ext}"
-            dest = pathlib.Path(cfg.music_dir) / subdir / fname
+            dest = P(cfg.music_dir) / subdir / fname
             embed_metadata(audio_path, track, "", lyrics_text)
             move_file(audio_path, dest)
             if lyrics_text:
