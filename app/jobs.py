@@ -62,6 +62,11 @@ class Jobs:
             (self.cfg.data_dir / "cookie.txt").write_text(cookie, encoding="utf-8")
         except Exception as e:
             log.warning("写入 cookie 文件失败: %s", e)
+        try:
+            self.last_cookie_ok = self.ncm.check_cookie()
+        except Exception as e:
+            log.warning("Cookie 验证失败: %s", e)
+            self.last_cookie_ok = False
 
     # ---------- 推荐源 ----------
 
