@@ -2,23 +2,9 @@
 
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from app.netease.qrlogin import _gen_qr_svg
-
-
-def test_gen_qr_svg():
-    svg = _gen_qr_svg("https://music.163.com/login?codekey=test")
-    assert svg.startswith("<?xml")
-    assert "svg" in svg
-
-
-def test_gen_qr_svg_cache_isolation():
-    svg1 = _gen_qr_svg("url-a")
-    svg2 = _gen_qr_svg("url-b")
-    assert svg1 != svg2
 
 
 def test_mock_phone_login():
@@ -43,20 +29,24 @@ def test_mock_phone_login():
 def test_mock_qr_login():
     """扫码登录 mock（零网络）。"""
     captured = []
+    call_log = {"qr_key": 0, "qr_create": 0, "qr_check": 0}
 
     def on_ok(c):
         captured.append(c)
 
     class FakeAPI:
-        def __init__(self):
-            self.call = 0
-
         def login_qr_key(self):
-            return {"ok": True, "key": "mock-key", "qrurl": "https://music.163.com/login?codekey=mock-key"}
+            call_log["qr_key"] += 1
+            return {"ok": True, "key": "mock-key"}
+
+        def login_qr_create(self, key, platform="web", qrimg=True):
+            call_log["qr_create"] += 1
+            return {"ok": True, "qrimg": "data:image/png;base64,fake", "qrurl": "https://example.com"}
 
         def login_qr_check(self, key):
-            self.call += 1
-            if self.call < 3:
+            call_log["qr_check"] += 1
+            n = call_log["qr_check"]
+            if n < 3:
                 return {"status": 801}
             return {"status": 803, "cookie": "MUSIC_U=f_u; __csrf=f_csrf"}
 
@@ -64,9 +54,12 @@ def test_mock_qr_login():
     h = LoginHandler(FakeAPI(), on_ok)
     r = h.qr_start()
     assert r["ok"] and r["key"] == "mock-key"
-    assert r["svg"].startswith("<?xml")
-    assert h.qr_poll("mock-key")["status"] == 801
-    assert h.qr_poll("mock-key")["status"] == 801
-    p = h.qr_poll("mock-key")
-    assert p["status"] == 803 and p.get("ok") is True
+    assert r["qrimg"] == "data:image/png;base64,fake"
+    assert call_log["qr_create"] == 1
+    for expected in (801, 801, 803):
+        p = h.qr_poll("mock-key")
+        assert p["status"] == expected
+        if expected == 803:
+            assert p["ok"]
     assert "MUSIC_U=f_u" in captured[0]
+

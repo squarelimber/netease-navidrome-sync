@@ -256,8 +256,8 @@ async function qrStart() {
   document.getElementById('qr-tip').textContent = '生成二维码…';
   const r = await (await fetch('/api/qr/start')).json();
   if (!r.ok) { document.getElementById('qr-tip').innerHTML = '<span class="bad">'+r.msg+'</span>'; return; }
-  document.getElementById('qr-img').innerHTML = r.svg;
-  document.getElementById('qr-tip').innerHTML = '请用 <b>网易云音乐 App</b> 扫码<br><small class="muted">如提示升级版本，请改用手机号登录</small>';
+  document.getElementById('qr-img').innerHTML = '<img src="'+r.qrimg+'" alt="二维码">';
+  document.getElementById('qr-tip').innerHTML = '请用 <b>网易云音乐 App</b> 扫码';
   if (qrTimer) clearInterval(qrTimer);
   qrTimer = setInterval(() => qrPoll(r.key), 2000);
 }

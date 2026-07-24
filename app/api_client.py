@@ -65,8 +65,16 @@ class NCMAPIClient:
         d = j.get("data", {})
         return {"ok": True, "key": d.get("unikey", ""), "qrurl": d.get("qrurl", "")}
 
+    def login_qr_create(self, key: str, platform: str = "web", qrimg: bool = True) -> dict:
+        """生成二维码图片。返回 {ok, qrurl, qrimg}（base64 PNG data URL）。"""
+        j = self._get("/login/qr/create", key=key, platform=platform, qrimg="true" if qrimg else "")
+        if j.get("code") != 200:
+            return {"ok": False, "msg": f"生成二维码失败: {j}"}
+        d = j.get("data", {})
+        return {"ok": True, "qrurl": d.get("qrurl", ""), "qrimg": d.get("qrimg", "")}
+
     def login_qr_check(self, key: str) -> dict:
-        """轮询二维码状态。成功时 raw.cookie 为完整 Cookie。"""
+        """轮询二维码状态。成功时 cookie 为完整登录态。"""
         j = self._get("/login/qr/check", key=key)
         return {"status": j.get("code", 0), "cookie": j.get("cookie", ""),
                 "msg": j.get("message", ""), "raw": j}

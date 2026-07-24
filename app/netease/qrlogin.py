@@ -3,7 +3,6 @@
 扫码 + 手机号登录，成功后回调 on_success(cookie) 注入运行中实例。
 """
 
-import base64
 import logging
 from typing import Callable
 
@@ -11,23 +10,7 @@ from ..api_client import NCMAPIClient
 
 log = logging.getLogger(__name__)
 
-_qr_sessions: dict[str, dict] = {}
-
-
-def _gen_qr_svg(text: str) -> str:
-    try:
-        import qrcode
-        from io import BytesIO
-        from qrcode.image.svg import SvgPathImage
-        qr = qrcode.QRCode(border=2, image_factory=SvgPathImage)
-        qr.add_data(text)
-        qr.make(fit=True)
-        buf = BytesIO()
-        qr.make_image().save(buf)
-        return buf.getvalue().decode("utf-8")
-    except Exception as e:
-        log.error("生成二维码失败: %s", e)
-        return ""
+_qr_sessions: dict[str, bool] = {}
 
 
 class LoginHandler:
@@ -38,16 +21,19 @@ class LoginHandler:
     # ------- 扫码登录 -------
 
     def qr_start(self) -> dict:
+        # 1. 获取 unikey
         r = self.api.login_qr_key()
         if not r.get("ok"):
             return r
         key = r["key"]
-        qrurl = r.get("qrurl", f"https://music.163.com/login?codekey={key}")
-        svg = _gen_qr_svg(qrurl)
-        if not svg:
-            return {"ok": False, "msg": "二维码生成失败"}
+        # 2. 通过 api-enhanced 生成二维码 PNG（base64）
+        cr = self.api.login_qr_create(key, platform="web")
+        if not cr.get("ok"):
+            return cr
         _qr_sessions[key] = True
-        return {"ok": True, "key": key, "svg": svg}
+        return {"ok": True, "key": key,
+                "qrimg": cr.get("qrimg", ""),
+                "qrurl": cr.get("qrurl", "")}
 
     def qr_poll(self, key: str) -> dict:
         if key not in _qr_sessions:
