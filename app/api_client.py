@@ -79,17 +79,6 @@ class NCMAPIClient:
         return {"status": j.get("code", 0), "cookie": j.get("cookie", ""),
                 "msg": j.get("message", ""), "raw": j}
 
-    def login_cellphone(self, phone: str, password: str) -> dict:
-        """手机号+密码登录。成功时 raw.cookie 为完整 Cookie。"""
-        j = self._post("/login/cellphone", {"phone": phone, "password": password})
-        if j.get("code") == 200:
-            cookie = j.get("cookie", "")
-            if cookie:
-                return {"ok": True, "cookie": cookie}
-            return {"ok": False, "msg": "登录成功但未收到 Cookie", "raw": j}
-        msg = j.get("message") or j.get("msg", str(j))
-        return {"ok": False, "msg": msg, "raw": j}
-
     # ------- 搜索 -------
 
     def search(self, keywords: str, limit: int = 30, offset: int = 0) -> list:

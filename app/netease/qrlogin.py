@@ -1,7 +1,4 @@
-"""网易云登录（委托 api-enhanced 后端）。
-
-扫码 + 手机号登录，成功后回调 on_success(cookie) 注入运行中实例。
-"""
+"""网易云扫码登录（委托 api-enhanced 后端）。"""
 
 import logging
 from typing import Callable
@@ -18,15 +15,11 @@ class LoginHandler:
         self.api = api
         self.on_success = on_success
 
-    # ------- 扫码登录 -------
-
     def qr_start(self) -> dict:
-        # 1. 获取 unikey
         r = self.api.login_qr_key()
         if not r.get("ok"):
             return r
         key = r["key"]
-        # 2. 通过 api-enhanced 生成二维码 PNG（base64）
         cr = self.api.login_qr_create(key, platform="web")
         if not cr.get("ok"):
             return cr
@@ -48,12 +41,4 @@ class LoginHandler:
                 log.info("扫码登录成功")
                 return {"status": 803, "ok": True}
             log.warning("扫码 803 但无 Cookie: raw=%s", r.get("raw"))
-        return r
-
-    # ------- 手机号登录 -------
-
-    def phone_login(self, phone: str, password: str) -> dict:
-        r = self.api.login_cellphone(phone, password)
-        if r.get("ok"):
-            self.on_success(r["cookie"])
         return r

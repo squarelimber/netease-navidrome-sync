@@ -1,29 +1,9 @@
-"""登录模块测试（扫码 + 手机号）。"""
+"""扫码登录模块测试。"""
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-
-def test_mock_phone_login():
-    """手机号登录 mock（零网络）。"""
-    captured = []
-
-    def on_ok(c):
-        captured.append(c)
-
-    class FakeAPI:
-        def login_cellphone(self, phone, password):
-            return {"ok": True, "cookie": "MUSIC_U=f_u; __csrf=f_csrf"}
-
-    from app.netease.qrlogin import LoginHandler
-    h = LoginHandler(FakeAPI(), on_ok)
-    r = h.phone_login("13800000000", "pwd")
-    assert r["ok"], r
-    assert "MUSIC_U=f_u" in captured[0]
-    assert "__csrf=f_csrf" in captured[0]
 
 
 def test_mock_qr_login():
@@ -62,4 +42,3 @@ def test_mock_qr_login():
         if expected == 803:
             assert p["ok"]
     assert "MUSIC_U=f_u" in captured[0]
-
