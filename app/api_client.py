@@ -9,13 +9,6 @@ import requests
 
 log = logging.getLogger(__name__)
 
-QUALITY_MAP = {
-    "标准 128k": "standard",
-    "极高 320k": "exhigh",
-    "无损 FLAC": "lossless",
-    "Hi-Res": "hires",
-}
-
 TIMEOUT = 25
 
 
@@ -35,24 +28,14 @@ class NCMAPIClient:
         log.info("Cookie 已更新（%d bytes）", len(cookie))
 
     def _get(self, path: str, **params) -> dict:
-        params.setdefault("cookie", self._cookie)
+        if self._cookie:
+            params["cookie"] = self._cookie
         try:
             r = self.session.get(f"{self.base_url}{path}", params=params, timeout=TIMEOUT)
             r.raise_for_status()
             return r.json()
         except Exception as e:
             log.warning("api-enhanced 请求失败 %s: %s", path, e)
-            return {"code": -1, "msg": str(e)}
-
-    def _post(self, path: str, data: dict = None) -> dict:
-        params = {"cookie": self._cookie}
-        try:
-            r = self.session.post(f"{self.base_url}{path}", params=params, json=data or {},
-                                  timeout=TIMEOUT)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            log.warning("api-enhanced POST 失败 %s: %s", path, e)
             return {"code": -1, "msg": str(e)}
 
     # ------- 登录 -------
@@ -108,16 +91,6 @@ class NCMAPIClient:
         if j.get("code") != 200:
             return []
         return [self._norm_song(s) for s in (j.get("songs") or [])]
-
-    def song_url(self, song_id: int, level: str = "standard") -> dict | None:
-        """取歌曲真实下载地址。"""
-        j = self._get("/song/url/v1", id=song_id, level=level)
-        if j.get("code") != 200:
-            return None
-        data = (j.get("data") or [None])[0]
-        if data and data.get("url"):
-            return data
-        return None
 
     def lyric(self, song_id: int) -> tuple[str | None, str | None]:
         """返回 (原文, 翻译)。"""

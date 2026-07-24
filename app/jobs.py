@@ -7,8 +7,6 @@ import threading
 import time
 from pathlib import Path
 
-import requests
-
 from . import matcher
 from .db import DB
 from .downloader import (DownloadError, MusicDLEngine, embed_metadata,
@@ -154,24 +152,10 @@ class Jobs:
             except Exception as e:
                 log.debug("网易云元数据获取失败(%s): %s", track.ncm_id, e)
 
-        # 下载：先试 api-enhanced 真实音源，再走 musicdl 源链
+        # 下载：走 musicdl 多源链
         audio_path, dl_source = None, ""
         tmp_dir = self.cfg.data_dir / "tmp_one"
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        if track.ncm_id:
-            try:
-                self.ncm_limiter.wait()
-                url_info = self.ncm.song_url(track.ncm_id, level=self.cfg.dl_quality)
-                if url_info and url_info.get("url"):
-                    r = requests.get(url_info["url"], timeout=self.cfg.dl_sources_timeout or 120)
-                    r.raise_for_status()
-                    ext = Path(url_info["url"].split("?")[0]).suffix or ".mp3"
-                    audio_path = tmp_dir / f"{track.ncm_id}{ext}"
-                    audio_path.write_bytes(r.content)
-                    dl_source = f"netease-{self.cfg.dl_quality}"
-            except Exception as e:
-                log.debug("api-enhanced 下载失败(%s): %s", track.ncm_id, e)
-
         if audio_path is None:
             try:
                 audio_path, dl_source = self.engine.download(track)

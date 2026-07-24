@@ -396,40 +396,47 @@ def create_app(cfg, db, jobs, scheduler=None):
     @app.post("/api/download")
     async def download(req: Request):
         ncm = getattr(app.state, "ncm_client", None)
-        jobs = getattr(app.state, "jobs", None)
-        if not ncm or not jobs:
+        engine = getattr(app.state, "engine", None)
+        if not ncm or not engine:
             return {"ok": False, "msg": "后端未就绪"}
         body = await req.json()
-        ncm_id = int(body.get("ncm_id", 0))
-        quality = str(body.get("quality", "lossless"))
         artist = str(body.get("artist", ""))
         title = str(body.get("title", ""))
-        if not ncm_id:
-            return {"ok": False, "msg": "缺少 ncm_id"}
+        quality = str(body.get("quality", "lossless"))
+        if not artist or not title:
+            return {"ok": False, "msg": "缺少 artist/title"}
         try:
-            import tempfile, requests as _req, pathlib
-            url_info = ncm.song_url(ncm_id, level=quality)
-            if not url_info or not url_info.get("url"):
-                return {"ok": False, "msg": "无法获取歌曲链接"}
-            r = _req.get(url_info["url"], timeout=120)
-            r.raise_for_status()
-            ext = pathlib.Path(url_info["url"].split("?")[0]).suffix or ".mp3"
-            tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
-            tmp.write(r.content); tmp.close()
+            from tempfile import NamedTemporaryFile
             from .downloader import embed_metadata, move_file
-            from .util import safe_name
+            from .util import safe_name, RateLimiter
             from .sources.base import Track
-            track = Track(title=title or "", artists=[artist] if artist else [],
-                          ncm_id=ncm_id, origin="manual_search", playlist="手动搜索",
-                          album=url_info.get("album",""))
-            olrc, tlrc = ncm.lyric(ncm_id)
-            from .jobs import _merge_lrc
-            lyrics_text = _merge_lrc(olrc, tlrc) if olrc else None
+            from .matcher import best_match
+            track = Track(title=title, artists=[artist] if artist else [],
+                          origin="manual_search", playlist="手动搜索")
+            # 解析 ncm_id（用来拿元数据/歌词）
+            ncm_limiter = RateLimiter(0.5)
+            ncm_limiter.wait()
+            candidates = ncm.search(f"{artist} {title}", limit=10)
+            hit = best_match(track, candidates)
+            if hit:
+                track.ncm_id = hit["id"]
+                track.title = hit["name"]
+                track.artists = hit["artists"]
+                track.album = hit.get("album", "")
+                ncm_limiter.wait()
+                olrc, tlrc = ncm.lyric(track.ncm_id)
+                from .jobs import _merge_lrc
+                lyrics_text = _merge_lrc(olrc, tlrc) if olrc else None
+            else:
+                lyrics_text = None
+            # 下载
+            audio_path, dl_source = engine.download(track)
+            ext = audio_path.suffix.lower()
             subdir = pathlib.Path("Discover")
-            fname = f"{safe_name(artist+' - '+title)}{ext}"
+            fname = f"{safe_name(' - '.join(track.artists) + ' - ' + track.title)}{ext}"
             dest = pathlib.Path(cfg.music_dir) / subdir / fname
-            embed_metadata(pathlib.Path(tmp.name), track, url_info.get("cover","") or "", lyrics_text)
-            move_file(pathlib.Path(tmp.name), dest)
+            embed_metadata(audio_path, track, "", lyrics_text)
+            move_file(audio_path, dest)
             if lyrics_text:
                 from .library import write_lrc_sidecar
                 write_lrc_sidecar(dest, lyrics_text)

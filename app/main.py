@@ -56,6 +56,7 @@ def main():
     app.state.qr_handler = LoginHandler(api=jobs.ncm, on_success=jobs.set_cookie)
     app.state.ncm_client = jobs.ncm
     app.state.jobs = jobs
+    app.state.engine = jobs.engine
     app.state.cfg = cfg
     uvicorn.run(app, host=cfg.web_host, port=cfg.web_port, log_level="warning")
 
