@@ -73,6 +73,13 @@ class NCMAPIClient:
         songs = (j.get("result") or {}).get("songs", [])
         return [self._norm_song(s) for s in songs]
 
+    def top_song(self, type_id: int = 0, limit: int = 100) -> list:
+        """排行榜单曲。type: 0热歌 1新歌 2原创 3飙升 4电音 5抖音。"""
+        j = self._get("/top/song", type=type_id)
+        if j.get("code") != 200:
+            return []
+        return [self._norm_song(s) for s in (j.get("data") or [])[:limit]]
+
     @staticmethod
     def _norm_song(s: dict) -> dict:
         return {

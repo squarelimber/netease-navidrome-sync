@@ -79,6 +79,10 @@ PAGE = """<!DOCTYPE html>
   .input::placeholder { color:#5a6a88; }
   .input-group { margin-bottom:6px; }
   .input-group label { display:block; font-size:12px; color:var(--muted); margin-bottom:3px; }
+  .tab-btn { background:transparent; color:var(--muted); border:0; padding:8px 20px;
+             font-size:13px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .tab-btn.active { color:#fff; border-bottom-color:var(--accent); }
+  .tab-btn:hover:not(.active) { color:#aabbdd; }
 </style>
 </head>
 <body>
@@ -113,10 +117,18 @@ PAGE = """<!DOCTYPE html>
 </div>
 
 <div class="card" style="margin-top:16px">
-  <h2>搜索下载</h2>
-  <div style="display:flex;gap:8px;margin-bottom:10px">
-    <input id="search-query" class="input" placeholder="搜歌曲、歌手…" style="flex:1" onkeydown="if(event.key==='Enter')doSearch()">
-    <button onclick="doSearch()" style="flex:0 0 auto">搜索</button>
+  <div style="display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:14px">
+    <button id="stab-search" class="tab-btn active" onclick="switchSearchTab('search')">搜索</button>
+    <button id="stab-rank" class="tab-btn" onclick="switchSearchTab('rank')">排行榜</button>
+  </div>
+  <div id="stab-search-content">
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input id="search-query" class="input" placeholder="搜歌曲、歌手…" style="flex:1" onkeydown="if(event.key==='Enter')doSearch()">
+      <button onclick="doSearch()" style="flex:0 0 auto">搜索</button>
+    </div>
+  </div>
+  <div id="stab-rank-content" class="hide">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="chart-btns"></div>
   </div>
   <div id="search-status" class="muted" style="font-size:12px"></div>
   <div class="scroll" style="max-height:420px"><table id="search-results"></table></div>
@@ -285,6 +297,34 @@ async function dlSong(artist, title) {
     : '<span class="bad">✗ 下载失败: '+(r.msg||'')+'</span>';
   load();
 }
+const CHARTS = [
+  {id:0, name:'热歌榜'}, {id:1, name:'新歌榜'}, {id:2, name:'原创榜'},
+  {id:3, name:'飙升榜'}, {id:4, name:'电音榜'}, {id:5, name:'抖音榜'},
+];
+function switchSearchTab(tab) {
+  document.getElementById('stab-search-content').classList.toggle('hide', tab !== 'search');
+  document.getElementById('stab-rank-content').classList.toggle('hide', tab !== 'rank');
+  document.getElementById('stab-search').classList.toggle('active', tab === 'search');
+  document.getElementById('stab-rank').classList.toggle('active', tab === 'rank');
+  if (tab === 'rank' && !document.getElementById('chart-btns').children.length) {
+    document.getElementById('chart-btns').innerHTML = CHARTS.map(c =>
+      `<button class="small" onclick="loadChart(${c.id},'${c.name}')" style="background:var(--card)">${c.name}</button>`
+    ).join('');
+  }
+}
+async function loadChart(typeId, typeName) {
+  const status = document.getElementById('search-status');
+  status.textContent = '加载 '+typeName+'…';
+  const r = await (await fetch('/api/chart?type='+typeId)).json();
+  document.getElementById('search-results').innerHTML =
+    '<tr><th>曲名</th><th>歌手</th><th>专辑</th><th></th></tr>' +
+    r.map(s => {
+      const a = encodeURIComponent(s.artists[0]||''), t = encodeURIComponent(s.name);
+      return `<tr><td>${s.name}</td><td class="muted">${s.artists.join('/')}</td><td class="muted">${s.album||'-'}</td>
+        <td><button class="small" onclick="dlSong('${a}','${t}')">下载</button></td></tr>`;
+    }).join('');
+  status.innerHTML = typeName+' — '+r.length+' 首';
+}
 load();
 setInterval(load, 30000);
 </script>
@@ -385,6 +425,16 @@ def create_app(cfg, db, jobs, scheduler=None):
             return {"error": "网易云后端未连接"}
         try:
             return ncm.search(q, limit)
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.get("/api/chart")
+    def chart(type: int = 0):
+        ncm = getattr(app.state, "ncm_client", None)
+        if not ncm:
+            return {"error": "网易云后端未连接"}
+        try:
+            return ncm.top_song(type, limit=100)
         except Exception as e:
             return {"error": str(e)}
 
