@@ -186,3 +186,34 @@ class ListenBrainzSource(Source):
         log.info("ListenBrainz 推荐合计: %d 首（每周歌单 %d + CF %d）",
                  len(tracks), len(tracks) - len(cf), len(cf))
         return tracks
+
+
+def get_recent_listens(username: str, min_ts: float = 0, limit: int = 200) -> list[dict]:
+    """获取用户近期播放记录，返回 [{artist, title, listened_at, duration_ms}, ...]。"""
+    session = _retry_session()
+    try:
+        params = {"count": limit}
+        if min_ts > 0:
+            params["min_ts"] = int(min_ts)
+        resp = session.get(f"{LB_API}/user/{username}/listens", params=params, timeout=20)
+        if resp.status_code != 200:
+            log.warning("LB 播放记录不可用(%s)", resp.status_code)
+            return []
+        listens = (resp.json().get("payload") or {}).get("listens", [])
+    except Exception as e:
+        log.warning("LB 播放记录获取失败: %s", e)
+        return []
+    out = []
+    for l in listens:
+        meta = l.get("track_metadata") or {}
+        info = meta.get("additional_info") or {}
+        out.append({
+            "artist": (meta.get("artist_name") or "").strip(),
+            "title": (meta.get("track_name") or "").strip(),
+            "listened_at": l.get("listened_at", 0),
+            "duration_ms": info.get("duration_ms", 0),
+        })
+    # 排除无歌手/无歌名的脏数据
+    out = [x for x in out if x["artist"] and x["title"]]
+    out.sort(key=lambda x: x["listened_at"])
+    return out

@@ -27,6 +27,7 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
 - **自动匹配校验**：归一化 + 模糊比对（标题/歌手/时长），避免 Cover 版误下
 - **完整元数据**：内嵌 ID3/FLAC/M4A 标签、封面、歌词，写 `.lrc` 旁挂文件
 - **查重不重复**：调用 Navidrome 的 Subsonic `search3` 接口检测曲库已有曲目
+- **听歌回传**：每日自动将 ListenBrainz 的新播放记录回传到网易云（听歌排行 + 最近播放）
 - **失败重试队列**：匹配/下载失败自动入队，按退避策略每日重试
 - **轻量状态页**：Cookie 健康、统计、运行历史、失败队列，可暂停刷新、中止任务、逐条重试
 - **Docker 一键部署**：两个容器（ncm-api + 本工具），共享音乐目录
@@ -111,8 +112,12 @@ docker compose up -d --build
 Navidrome 设置中开启 ListenBrainz / Last.fm scrobble：
 
 ```
-你听歌 → Navidrome scrobble → 平台生成推荐 → 工具次日拉取下载
+你听歌 → Navidrome scrobble → ListenBrainz
+                                 ├── 平台生成推荐 → 工具次日拉取下载
+                                 └── 工具每日回传 → 网易云听歌排行
 ```
+
+本工具每日同步时，会自动从 ListenBrainz 读取新播放记录，匹配网易云曲目后调用 `/scrobble` 回传到网易云，保持听歌排行和最近播放同步。
 
 ## 目录结构（运行后）
 
@@ -131,6 +136,7 @@ music/
 ## 状态页
 
 - 网易云 Cookie 状态 ✓/✗
+- 下载源链、推荐源列表、听歌同步状态
 - 四类曲目统计（已下载/已存在/失败/待处理）
 - 搜索下载 + 排行榜浏览
 - 网易云扫码登录

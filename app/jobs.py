@@ -8,14 +8,14 @@ import time
 from pathlib import Path
 
 from . import matcher
-from .db import DB
+from .db import DB, SCROBBLE_TS_KEY
 from .downloader import (DownloadError, MusicDLEngine, embed_metadata,
                          move_file, sniff_duration_ms)
 from .library import SubsonicClient, display_name, write_lrc_sidecar, write_m3u8
 from .api_client import NCMAPIClient
 from .sources.base import Track
 from .sources.lastfm import LastFmSource
-from .sources.listenbrainz import ListenBrainzSource
+from .sources.listenbrainz import ListenBrainzSource, get_recent_listens
 from .sources.netease_daily import NeteaseDailySource
 from .sources.netease_playlist import NeteasePlaylistSource
 from .util import RateLimiter, safe_name, track_key
@@ -216,6 +216,58 @@ class Jobs:
             except Exception as e:
                 log.error("生成歌单文件失败 %s: %s", playlist, e)
 
+    # ---------- 听歌回传 ----------
+
+    def _scrobble_recent(self) -> dict:
+        """从 ListenBrainz 拉取近期播放记录，回传到网易云，返回 {ok, count, errors}。"""
+        sc = self.cfg.sources.get("listenbrainz")
+        if not sc or not sc.enabled:
+            return {"ok": False, "msg": "ListenBrainz 未启用"}
+        username = sc.extra.get("username", "")
+        if not username:
+            return {"ok": False, "msg": "未配置 ListenBrainz 用户名"}
+        if not self.last_cookie_ok:
+            return {"ok": False, "msg": "网易云 Cookie 无效"}
+
+        last_ts = float(self.db.get_property(SCROBBLE_TS_KEY, "0"))
+        listens = get_recent_listens(username, min_ts=last_ts)
+
+        if not listens:
+            return {"ok": True, "count": 0, "msg": f"无新记录（上次: {int(last_ts)}）"}
+
+        success, fail, max_ts = 0, 0, last_ts
+        for l in listens:
+            if l["listened_at"] <= last_ts:
+                continue
+            try:
+                self.ncm_limiter.wait()
+                candidates = self.ncm.search(f"{l['artist']} {l['title']}", limit=5)
+                track = Track(title=l["title"], artists=[l["artist"]],
+                              duration_ms=l.get("duration_ms", 0))
+                hit = matcher.best_match(track, candidates,
+                                         self.cfg.title_threshold, self.cfg.max_duration_diff)
+                if not hit:
+                    # 宽松一点再试一次
+                    track2 = Track(title=l["title"], artists=l["artist"].split("/"))
+                    hit = matcher.best_match(track2, candidates,
+                                             self.cfg.title_threshold - 5, self.cfg.max_duration_diff + 5)
+                if not hit:
+                    fail += 1
+                    continue
+                time_ms = l.get("duration_ms", 180000) or 180000
+                self.ncm.scrobble(hit["id"], time_ms)
+                success += 1
+                if l["listened_at"] > max_ts:
+                    max_ts = l["listened_at"]
+            except Exception as e:
+                log.debug("听歌打卡失败 %s - %s: %s", l["artist"], l["title"], e)
+                fail += 1
+
+        if max_ts > last_ts:
+            self.db.set_property(SCROBBLE_TS_KEY, str(max_ts))
+        log.info("听歌回传: %d 成功, %d 失败（跳过 %d 首）", success, fail, len(listens) - success - fail)
+        return {"ok": True, "count": success, "fail": fail, "total": len(listens)}
+
     # ---------- 主流程 ----------
 
     def daily_run(self):
@@ -316,6 +368,14 @@ class Jobs:
 
             # 5. 重建受影响的歌单文件
             self._regen_playlist_files(list(affected_playlists))
+
+            # 6. 听歌回传到网易云
+            try:
+                scrobble_stats = self._scrobble_recent()
+                stats["scrobble"] = scrobble_stats
+            except Exception as e:
+                log.warning("听歌回传异常: %s", e)
+                stats["scrobble"] = {"ok": False, "msg": str(e)}
 
             stats["duration_s"] = round(time.time() - started, 1)
             log.info("========== 每日同步完成: %s ==========", stats)

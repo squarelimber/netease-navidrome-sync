@@ -185,6 +185,7 @@ async function load() {
     <div>网易云 Cookie：${ckHtml}</div>
     <div>下载源链：<b>${st.dl_sources.join(' → ')}</b></div>
     <div>推荐源：<b>${st.enabled_sources.join('、') || '无'}</b></div>
+    <div>听歌同步：${st.scrobble || '<span class="muted">-</span>'}</div>
     <div>正在运行：<b>${st.running ? '<span class="warn">是</span>' : '否'}</b></div>`;
   document.getElementById('run-btn').disabled = st.running;
   document.getElementById('stop-btn').classList.toggle('hide', !st.running);
@@ -364,7 +365,18 @@ def create_app(cfg, db, jobs, scheduler=None):
             "running": jobs._lock.locked(),
             "aborted": jobs.aborted,
             "last_aborted": bool(last_stats.get("aborted")),
+            "scrobble": _scrobble_status(last_stats),
         }
+
+
+def _scrobble_status(last_stats: dict) -> str:
+    s = last_stats.get("scrobble", {})
+    if not s:
+        return ""
+    if s.get("ok"):
+        c = s.get("count", 0)
+        return f'<span class="ok">✓ {c} 首</span>' if c else '<span class="muted">0 首</span>'
+    return '<span class="warn">✗ ' + (s.get("msg", "?") or "?")[:30] + '</span>'
 
     @app.get("/api/stats")
     def stats():

@@ -138,3 +138,10 @@ class NCMAPIClient:
             return False
         j = self._get("/login/status")
         return j.get("code") == 200 and bool((j.get("data") or {}).get("account"))
+
+    # ------- 听歌打卡 -------
+
+    def scrobble(self, song_id: int, time_ms: int = 180000) -> bool:
+        """写入听歌记录（最近播放 + 听歌排行计数）。"""
+        j = self._get("/scrobble", id=song_id, sourceid=song_id, time=time_ms)
+        return j.get("code") == 200

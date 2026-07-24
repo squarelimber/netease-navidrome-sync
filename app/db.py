@@ -41,7 +41,14 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at REAL,
     stats TEXT DEFAULT '{}'            -- JSON
 );
+
+CREATE TABLE IF NOT EXISTS property (
+    key TEXT PRIMARY KEY,
+    value TEXT DEFAULT ''
+);
 """
+
+SCROBBLE_TS_KEY = "last_scrobble_ts"
 
 # 失败重试退避（天），按 attempts 递增
 RETRY_BACKOFF_DAYS = [1, 1, 3, 7, 14, 30, 60]
@@ -193,6 +200,18 @@ class DB:
             "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---------- property ----------
+
+    def get_property(self, key: str, default: str = "") -> str:
+        row = self.conn.execute("SELECT value FROM property WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_property(self, key: str, value: str):
+        self.conn.execute(
+            "INSERT OR REPLACE INTO property (key, value) VALUES (?, ?)", (key, value),
+        )
+        self.conn.commit()
 
     def close(self):
         self.conn.close()
