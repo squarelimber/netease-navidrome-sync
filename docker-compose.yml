@@ -18,7 +18,7 @@ services:
       # 改成你的实际音乐目录（必须与 Navidrome 挂载的是同一目录）
       - /path/to/your/music:/music
       - ./data:/app/data
-      - ./config.yaml:/app/config.yaml:ro
+      - ./config.yaml:/app/config.yaml
       - ./app:/app/app
     ports:
       - "8678:8678"

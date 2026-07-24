@@ -9,6 +9,17 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 log = logging.getLogger(__name__)
 
+
+def _scrobble_status(last_stats: dict) -> str:
+    s = last_stats.get("scrobble", {})
+    if not s:
+        return ""
+    if s.get("ok"):
+        c = s.get("count", 0)
+        return f'<span class="ok">✓ {c} 首</span>' if c else '<span class="muted">0 首</span>'
+    return '<span class="warn">✗ ' + (s.get("msg", "?") or "?")[:30] + '</span>'
+
+
 PAGE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -83,10 +94,15 @@ PAGE = """<!DOCTYPE html>
              font-size:13px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
   .tab-btn.active { color:#fff; border-bottom-color:var(--accent); }
   .tab-btn:hover:not(.active) { color:#aabbdd; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:99; }
+  .modal-content { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:24px; max-width:700px; width:90%; max-height:80vh; }
+  .modal textarea { background:#0b1020; border:1px solid var(--line); border-radius:8px; color:#dfe6f0; font-family:monospace; font-size:13px; padding:12px; width:100%; height:50vh; resize:vertical; }
 </style>
 </head>
 <body>
-<h1>🎵 <span>Navidrome Sync</span></h1>
+<h1>🎵 <span>Navidrome Sync</span>
+  <span onclick="showConfig()" style="font-size:16px;cursor:pointer;color:var(--muted);margin-left:10px" title="配置">⚙</span>
+</h1>
 <div class="sub" id="next-run">加载中…</div>
 
 <div class="grid">
@@ -298,6 +314,25 @@ async function dlSong(artist, title) {
     : '<span class="bad">✗ 下载失败: '+(r.msg||'')+'</span>';
   load();
 }
+function showConfig() {
+  showModal('<h2>配置编辑</h2><p style="font-size:13px;color:var(--muted);margin-bottom:12px">修改后保存，部分变更需重启容器生效（如端口、Navidrome 地址）</p><textarea id="config-editor"></textarea><div class="bar" style="margin-top:12px"><button onclick="saveConfig()">保存</button><button class="secondary" onclick="hideModal()">取消</button><span id="config-status"></span></div>');
+  document.getElementById('config-status').textContent = '加载中…';
+  fetch('/api/config').then(r=>r.text()).then(t=>{ document.getElementById('config-editor').value=t; document.getElementById('config-status').textContent=''; });
+}
+async function saveConfig() {
+  const btn = document.querySelector('.modal button'); btn.disabled = true; btn.textContent = '保存中…';
+  const text = document.getElementById('config-editor').value;
+  document.getElementById('config-status').innerHTML = '';
+  const r = await (await fetch('/api/config', {method:'PUT', headers:{'Content-Type':'text/yaml'}, body:text})).json();
+  document.getElementById('config-status').innerHTML = r.ok ? '<span class="ok">✓ 已保存</span>' : '<span class="bad">✗ '+r.msg+'</span>';
+  btn.disabled = false; btn.textContent = '保存';
+}
+function showModal(html) {
+  const m = document.createElement('div'); m.className='modal'; m.innerHTML='<div class="modal-content">'+html+'</div>';
+  m.addEventListener('click', e => { if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
+function hideModal() { const m = document.querySelector('.modal'); if(m) m.remove(); }
 const CHARTS = [
   {id:0, name:'热歌榜'}, {id:1, name:'新歌榜'}, {id:2, name:'原创榜'},
   {id:3, name:'飙升榜'}, {id:4, name:'电音榜'}, {id:5, name:'抖音榜'},
@@ -368,16 +403,6 @@ def create_app(cfg, db, jobs, scheduler=None):
             "scrobble": _scrobble_status(last_stats),
         }
 
-
-def _scrobble_status(last_stats: dict) -> str:
-    s = last_stats.get("scrobble", {})
-    if not s:
-        return ""
-    if s.get("ok"):
-        c = s.get("count", 0)
-        return f'<span class="ok">✓ {c} 首</span>' if c else '<span class="muted">0 首</span>'
-    return '<span class="warn">✗ ' + (s.get("msg", "?") or "?")[:30] + '</span>'
-
     @app.get("/api/stats")
     def stats():
         return db.stats()
@@ -415,7 +440,44 @@ def _scrobble_status(last_stats: dict) -> str:
         db.reset_retry(track_id)
         return {"ok": True}
 
-    # 网易云登录端点（由 LoginHandler 注入）
+    @app.get("/api/config")
+    def get_config():
+        try:
+            return JSONResponse(content=cfg._path.read_text(encoding="utf-8"))
+        except Exception as e:
+            return {"ok": False, "msg": str(e)}
+
+    @app.put("/api/config")
+    async def put_config(req: Request):
+        try:
+            new_text = (await req.body()).decode("utf-8")
+            import yaml; yaml.safe_load(new_text)
+        except Exception as e:
+            return {"ok": False, "msg": f"YAML 格式错误: {e}"}
+        try:
+            cfg._path.write_text(new_text, encoding="utf-8")
+            from . import config as config_mod
+            new_cfg = config_mod.load()
+            for k in ("music_dir","data_dir","ncm_api_url","cron","discover_daily_limit",
+                      "dl_sources","dl_interval","dl_quality","dl_sources_timeout",
+                      "title_threshold","max_duration_diff","run_on_startup",
+                      "web_host","web_port"):
+                setattr(cfg, k, getattr(new_cfg, k))
+            cfg.navidrome = new_cfg.navidrome
+            cfg.sources = new_cfg.sources
+            if scheduler:
+                try:
+                    parts = cfg.cron.split()
+                    from apscheduler.triggers.cron import CronTrigger
+                    scheduler.reschedule_job("daily_sync", trigger=CronTrigger(
+                        minute=parts[0], hour=parts[1], day=parts[2],
+                        month=parts[3], day_of_week=parts[4]))
+                except Exception:
+                    pass
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "msg": str(e)}
+
     @app.get("/api/qr/start")
     def qr_start():
         handler = getattr(app.state, "qr_handler", None)
@@ -469,27 +531,23 @@ def _scrobble_status(last_stats: dict) -> str:
             from .matcher import best_match
             track = Track(title=title, artists=[artist] if artist else [],
                           origin="manual_search", playlist="手动搜索")
-            # 解析 ncm_id（用来拿元数据/歌词）
             ncm_limiter = RateLimiter(0.5)
             ncm_limiter.wait()
             candidates = ncm.search(f"{artist} {title}", limit=10)
             hit = best_match(track, candidates)
             if hit:
-                track.ncm_id = hit["id"]
-                track.title = hit["name"]
-                track.artists = hit["artists"]
-                track.album = hit.get("album", "")
+                track.ncm_id = hit["id"]; track.title = hit["name"]
+                track.artists = hit["artists"]; track.album = hit.get("album", "")
                 ncm_limiter.wait()
                 olrc, tlrc = ncm.lyric(track.ncm_id)
                 from .jobs import _merge_lrc
                 lyrics_text = _merge_lrc(olrc, tlrc) if olrc else None
             else:
                 lyrics_text = None
-            # 下载
             audio_path, dl_source = engine.download(track)
             ext = audio_path.suffix.lower()
             subdir = P("Discover")
-            fname = f"{safe_name(' - '.join(track.artists) + ' - ' + track.title)}{ext}"
+            fname = safe_name(' - '.join(track.artists) + ' - ' + track.title) + ext
             dest = P(cfg.music_dir) / subdir / fname
             embed_metadata(audio_path, track, "", lyrics_text)
             move_file(audio_path, dest)
@@ -498,8 +556,7 @@ def _scrobble_status(last_stats: dict) -> str:
                 write_lrc_sidecar(dest, lyrics_text)
             return {"ok": True, "file": str(subdir / fname)}
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
             return {"ok": False, "msg": str(e)}
 
     return app

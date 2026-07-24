@@ -49,6 +49,33 @@ class Config:
     run_on_startup: bool
     web_host: str
     web_port: int
+    _path: Path = field(default_factory=Path)
+    _raw: dict = field(default_factory=dict)
+
+    def save(self):
+        """将当前配置写回 YAML 文件。"""
+        raw = self._raw.copy()
+        raw["music_dir"] = str(self.music_dir)
+        raw["data_dir"] = str(self.data_dir)
+        raw["ncm_api_url"] = self.ncm_api_url
+        raw["navidrome"] = {"url": self.navidrome.url, "username": self.navidrome.username, "password": self.navidrome.password}
+        raw["sources"] = {}
+        for name, sc in self.sources.items():
+            d = {"enabled": sc.enabled}
+            d.update(sc.extra)
+            raw["sources"][name] = d
+        raw["discover_daily_limit"] = self.discover_daily_limit
+        raw["download"]["sources"] = self.dl_sources
+        raw["download"]["interval_seconds"] = self.dl_interval
+        raw["download"]["title_threshold"] = self.title_threshold
+        raw["download"]["max_duration_diff"] = self.max_duration_diff
+        raw["schedule"] = raw.get("schedule", {})
+        raw["schedule"]["cron"] = self.cron
+        raw["schedule"]["run_on_startup"] = self.run_on_startup
+        raw["web"]["host"] = self.web_host
+        raw["web"]["port"] = self.web_port
+        with open(self._path, "w", encoding="utf-8") as f:
+            yaml.dump(raw, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 def _find_config_file() -> Path:
@@ -95,6 +122,8 @@ def load() -> Config:
     web = raw.get("web") or {}
 
     return Config(
+        _path=cfg_path,
+        _raw=raw,
         music_dir=music_dir,
         data_dir=data_dir,
         navidrome=navidrome,
