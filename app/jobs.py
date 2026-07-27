@@ -31,7 +31,7 @@ class Jobs:
         self.db = db
         self.ncm = NCMAPIClient(cfg.ncm_api_url)
         if cfg.netease_cookie:
-            self.ncm.set_cookie(cfg.netease_cookie)
+            self.set_cookie(cfg.netease_cookie)
         self.engine = MusicDLEngine(
             cfg.dl_sources, cfg.data_dir / "tmp_dl",
             netease_cookie=cfg.netease_cookie,

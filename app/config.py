@@ -65,13 +65,15 @@ class Config:
             d.update(sc.extra)
             raw["sources"][name] = d
         raw["discover_daily_limit"] = self.discover_daily_limit
+        raw.setdefault("download", {})
         raw["download"]["sources"] = self.dl_sources
         raw["download"]["interval_seconds"] = self.dl_interval
         raw["download"]["title_threshold"] = self.title_threshold
         raw["download"]["max_duration_diff"] = self.max_duration_diff
-        raw["schedule"] = raw.get("schedule", {})
+        raw.setdefault("schedule", {})
         raw["schedule"]["cron"] = self.cron
         raw["schedule"]["run_on_startup"] = self.run_on_startup
+        raw.setdefault("web", {})
         raw["web"]["host"] = self.web_host
         raw["web"]["port"] = self.web_port
         with open(self._path, "w", encoding="utf-8") as f:

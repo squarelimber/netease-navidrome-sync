@@ -97,6 +97,12 @@ PAGE = """<!DOCTYPE html>
   .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:99; }
   .modal-content { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:24px; max-width:700px; width:90%; max-height:80vh; }
   .modal textarea { background:#0b1020; border:1px solid var(--line); border-radius:8px; color:#dfe6f0; font-family:monospace; font-size:13px; padding:12px; width:100%; height:50vh; resize:vertical; }
+  .cfg-group { display:flex; flex-direction:column; gap:3px; flex:1; min-width:100px; margin-bottom:10px; }
+  .cfg-group label { font-size:12px; color:var(--muted); }
+  .cfg-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+  .cfg-sep { font-size:12px; color:#8899cc; border-bottom:1px solid var(--line); padding:12px 0 4px; margin:6px 0 10px; text-transform:uppercase; letter-spacing:1px; }
+  .cfg-cb { font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer; }
+  .cfg-cb input[type=checkbox] { width:16px; height:16px; }
 </style>
 </head>
 <body>
@@ -315,24 +321,93 @@ async function dlSong(artist, title) {
   load();
 }
 function showConfig() {
-  showModal('<h2>配置编辑</h2><p style="font-size:13px;color:var(--muted);margin-bottom:12px">修改后保存，部分变更需重启容器生效（如端口、Navidrome 地址）</p><textarea id="config-editor"></textarea><div class="bar" style="margin-top:12px"><button onclick="saveConfig()">保存</button><button class="secondary" onclick="hideModal()">取消</button><span id="config-status"></span></div>');
-  document.getElementById('config-status').textContent = '加载中…';
-  fetch('/api/config').then(r=>r.text()).then(t=>{ document.getElementById('config-editor').value=t; document.getElementById('config-status').textContent=''; });
+  const html = `<div style="min-width:600px">
+    <h2 style="margin-bottom:16px">配置</h2>
+    <div class="cfg-group"><label>Navidrome 地址</label><input id="c-nav-url" class="input" placeholder="http://192.168.1.10:4533"></div>
+    <div class="cfg-row"><div class="cfg-group"><label>用户名</label><input id="c-nav-user" class="input"></div>
+      <div class="cfg-group"><label>密码</label><input id="c-nav-pass" class="input" type="password"></div></div>
+
+    <div class="cfg-sep">推荐源</div>
+    <div class="cfg-row"><label class="cfg-cb"><input type="checkbox" id="c-lb-en" onchange="cfgToggle('c-lb-un')"> ListenBrainz</label><input id="c-lb-un" class="input" placeholder="用户名" style="width:200px" disabled></div>
+    <div class="cfg-row"><label class="cfg-cb"><input type="checkbox" id="c-lf-en" onchange="cfgToggle('c-lf-k');cfgToggle('c-lf-u')"> Last.fm</label><input id="c-lf-k" class="input" placeholder="API Key" style="width:200px" disabled><input id="c-lf-u" class="input" placeholder="用户名" style="width:160px" disabled></div>
+    <div class="cfg-row"><label class="cfg-cb"><input type="checkbox" id="c-dd-en"> 网易云日推</label>
+      <label class="cfg-cb"><input type="checkbox" id="c-pl-en"> 网易云歌单同步</label></div>
+
+    <div class="cfg-sep">下载</div>
+    <div class="cfg-row" style="flex-wrap:wrap" id="c-dl-srcs"></div>
+    <div class="cfg-row"><div class="cfg-group"><label>匹配阈值</label><input id="c-th" class="input" style="width:80px" type="number"></div>
+      <div class="cfg-group"><label>时长差(秒)</label><input id="c-dur" class="input" style="width:80px" type="number"></div>
+      <div class="cfg-group"><label>下载间隔(秒)</label><input id="c-int" class="input" style="width:80px" type="number"></div></div>
+
+    <div class="cfg-sep">调度</div>
+    <div class="cfg-row"><div class="cfg-group"><label>Cron</label><input id="c-cron" class="input" style="width:300px" placeholder="30 4 * * *"></div></div>
+
+    <details style="margin-top:14px"><summary style="cursor:pointer;font-size:13px;color:var(--muted)">高级 → 完整 YAML</summary>
+      <textarea id="c-yaml" class="input" style="font-family:monospace;height:200px;margin-top:8px"></textarea>
+    </details>
+
+    <div class="bar" style="margin-top:14px"><button onclick="saveConfig()">保存</button><button class="secondary" onclick="hideModal()">取消</button><span id="cfg-st"></span></div>
+  </div>`;
+  showModal(html);
+  document.getElementById('cfg-st').textContent = '加载中…';
+  fetch('/api/config').then(r=>r.text()).then(t => {
+    const y = parseYaml(t);
+    setVal('c-nav-url', y.navidrome?.url); setVal('c-nav-user', y.navidrome?.username); setVal('c-nav-pass', y.navidrome?.password);
+    setCb('c-lb-en', y.sources?.listenbrainz?.enabled);
+    setVal('c-lb-un', y.sources?.listenbrainz?.username);
+    setCb('c-lf-en', y.sources?.lastfm?.enabled);
+    setVal('c-lf-k', y.sources?.lastfm?.api_key); setVal('c-lf-u', y.sources?.lastfm?.username);
+    setCb('c-dd-en', y.sources?.netease_daily?.enabled); setCb('c-pl-en', y.sources?.netease_playlists?.enabled);
+    const srcs = ['netease','kuwo','migu','bodian','qq'];
+    const act = (y.download?.sources || []);
+    document.getElementById('c-dl-srcs').innerHTML = srcs.map(s =>
+      `<label class="cfg-cb" style="margin-right:8px"><input type="checkbox" value="${s}" ${act.includes(s)?'checked':''}> ${s}</label>`
+    ).join('');
+    setVal('c-th', y.download?.title_threshold); setVal('c-dur', y.download?.max_duration_diff);
+    setVal('c-int', y.download?.interval_seconds); setVal('c-cron', y.schedule?.cron);
+    document.getElementById('c-yaml').value = t;
+    document.getElementById('cfg-st').textContent = '';
+  });
+}
+function cfgToggle(id) { document.getElementById(id).disabled = !document.getElementById(id.replace('-k','-en').replace('-u','-en')).checked; }
+function setVal(id, v) { const e=document.getElementById(id); if(e && v!==undefined) e.value=v; }
+function setCb(id, v) { const e=document.getElementById(id); if(e) e.checked=!!v; }
+function parseYaml(t) {
+  const o={}; let sec=null;
+  t.split('\\n').forEach(l => {
+    const m = l.match(/^(\\S[^:]*):/); if(m) sec=m[1];
+    if(sec && l.match(/^\\s+(\\w+):\\s*(.*)/)) { const k=RegExp.$1,v=RegExp.$2; o[sec]||(o[sec]={}); o[sec][k]=v.replace(/^['"]|['"]$/g,''); }
+    if(!l.trim().startsWith('#')&&l.includes(': ')) {
+      const parts=l.split(': '); if(parts.length==2&&!l.startsWith(' ')) o[parts[0]]=parts[1].replace(/^['"]|['"]$/g,'');
+    }
+  });
+  return o;
 }
 async function saveConfig() {
-  const btn = document.querySelector('.modal button'); btn.disabled = true; btn.textContent = '保存中…';
-  const text = document.getElementById('config-editor').value;
-  document.getElementById('config-status').innerHTML = '';
-  const r = await (await fetch('/api/config', {method:'PUT', headers:{'Content-Type':'text/yaml'}, body:text})).json();
-  document.getElementById('config-status').innerHTML = r.ok ? '<span class="ok">✓ 已保存</span>' : '<span class="bad">✗ '+r.msg+'</span>';
-  btn.disabled = false; btn.textContent = '保存';
+  const cb=n=>document.getElementById(n)?.checked||false, val=n=>document.getElementById(n)?.value||'';
+  const srcs=Array.from(document.querySelectorAll('#c-dl-srcs input:checked')).map(e=>e.value);
+  let y=document.getElementById('c-yaml').value;
+  if(!y.trim()){
+    const esc=s=>s.replace(/"/g,'\\"');
+    y= `music_dir: /music
+data_dir: /app/data
+ncm_api_url: ${val('c-nav-url')||'http://ncm-api:3000'}
+navidrome:\n  url: ${esc(val('c-nav-url'))}\n  username: ${esc(val('c-nav-user'))}\n  password: ${esc(val('c-nav-pass'))}
+netease:\n  cookie_file: /app/data/cookie.txt
+sources:\n  netease_daily: {enabled: ${cb('c-dd-en')}}\n  netease_playlists: {enabled: ${cb('c-pl-en')}, playlists: []}\n  listenbrainz: {enabled: ${cb('c-lb-en')}, username: ${val('c-lb-un')}}\n  lastfm: {enabled: ${cb('c-lf-en')}, api_key: ${val('c-lf-k')}, username: ${val('c-lf-u')}}
+download:\n  sources: [${srcs.join(',')}]\n  interval_seconds: ${val('c-int')||2}\n  title_threshold: ${val('c-th')||85}\n  max_duration_diff: ${val('c-dur')||12}
+schedule:\n  cron: ${val('c-cron')||'30 4 * * *'}\n  run_on_startup: false
+web:\n  host: 0.0.0.0\n  port: 8678`.trim();
+  }
+  const r=await(await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'text/yaml'},body:y})).json();
+  document.getElementById('cfg-st').innerHTML=r.ok?'<span class="ok">✓ 已保存, 配置已热加载</span>':'<span class="bad">✗ '+r.msg+'</span>';
 }
+function hideModal() { const m = document.querySelector('.modal'); if(m) m.remove(); }
 function showModal(html) {
   const m = document.createElement('div'); m.className='modal'; m.innerHTML='<div class="modal-content">'+html+'</div>';
   m.addEventListener('click', e => { if(e.target===m) m.remove(); });
   document.body.appendChild(m);
 }
-function hideModal() { const m = document.querySelector('.modal'); if(m) m.remove(); }
 const CHARTS = [
   {id:0, name:'热歌榜'}, {id:1, name:'新歌榜'}, {id:2, name:'原创榜'},
   {id:3, name:'飙升榜'}, {id:4, name:'电音榜'}, {id:5, name:'抖音榜'},
