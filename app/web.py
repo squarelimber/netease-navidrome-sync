@@ -384,23 +384,25 @@ function parseYaml(t) {
   return o;
 }
 async function saveConfig() {
-  const cb=n=>document.getElementById(n)?.checked||false, val=n=>document.getElementById(n)?.value||'';
-  const srcs=Array.from(document.querySelectorAll('#c-dl-srcs input:checked')).map(e=>e.value);
-  let y=document.getElementById('c-yaml').value;
-  if(!y.trim()){
-    const esc=s=>s.replace(/"/g,'\\"');
-    y= `music_dir: /music
-data_dir: /app/data
-ncm_api_url: ${val('c-nav-url')||'http://ncm-api:3000'}
-navidrome:\n  url: ${esc(val('c-nav-url'))}\n  username: ${esc(val('c-nav-user'))}\n  password: ${esc(val('c-nav-pass'))}
-netease:\n  cookie_file: /app/data/cookie.txt
-sources:\n  netease_daily: {enabled: ${cb('c-dd-en')}}\n  netease_playlists: {enabled: ${cb('c-pl-en')}, playlists: []}\n  listenbrainz: {enabled: ${cb('c-lb-en')}, username: ${val('c-lb-un')}}\n  lastfm: {enabled: ${cb('c-lf-en')}, api_key: ${val('c-lf-k')}, username: ${val('c-lf-u')}}
-download:\n  sources: [${srcs.join(',')}]\n  interval_seconds: ${val('c-int')||2}\n  title_threshold: ${val('c-th')||85}\n  max_duration_diff: ${val('c-dur')||12}
-schedule:\n  cron: ${val('c-cron')||'30 4 * * *'}\n  run_on_startup: false
-web:\n  host: 0.0.0.0\n  port: 8678`.trim();
-  }
-  const r=await(await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'text/yaml'},body:y})).json();
-  document.getElementById('cfg-st').innerHTML=r.ok?'<span class="ok">✓ 已保存, 配置已热加载</span>':'<span class="bad">✗ '+r.msg+'</span>';
+  const g = id => document.getElementById(id);
+  const v = id => g(id)?.value||'';
+  const c = id => g(id)?.checked||false;
+  const srcs = Array.from(document.querySelectorAll('#c-dl-srcs input:checked')).map(e=>e.value);
+  const body = {
+    navidrome: {url: v('c-nav-url'), username: v('c-nav-user'), password: v('c-nav-pass')},
+    sources: {
+      netease_daily: {enabled: c('c-dd-en')},
+      netease_playlists: {enabled: c('c-pl-en'), playlists: []},
+      listenbrainz: {enabled: c('c-lb-en'), username: v('c-lb-un')},
+      lastfm: {enabled: c('c-lf-en'), api_key: v('c-lf-k'), username: v('c-lf-u')}
+    },
+    download: {sources: srcs, interval_seconds: parseFloat(v('c-int'))||2,
+               title_threshold: parseInt(v('c-th'))||85, max_duration_diff: parseInt(v('c-dur'))||12},
+    schedule: {cron: v('c-cron')||'30 4 * * *'},
+  };
+  const r = await (await fetch('/api/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})).json();
+  g('cfg-st').innerHTML = r.ok ? '<span class="ok">✓ 已保存</span>' : '<span class="bad">✗ '+r.msg+'</span>';
+  if (r.ok) setTimeout(hideModal, 1200);
 }
 function hideModal() { const m = document.querySelector('.modal'); if(m) m.remove(); }
 function showModal(html) {
@@ -525,21 +527,32 @@ def create_app(cfg, db, jobs, scheduler=None):
     @app.put("/api/config")
     async def put_config(req: Request):
         try:
-            new_text = (await req.body()).decode("utf-8")
-            import yaml; yaml.safe_load(new_text)
+            import yaml
+            updates = await req.json()
         except Exception as e:
-            return {"ok": False, "msg": f"YAML 格式错误: {e}"}
+            return {"ok": False, "msg": f"请求格式错误: {e}"}
         try:
-            cfg._path.write_text(new_text, encoding="utf-8")
+            raw = cfg._raw.copy() if isinstance(cfg._raw, dict) else {}
+            def merge(d, u):
+                for k, v in u.items():
+                    if isinstance(v, dict) and isinstance(d.get(k), dict):
+                        merge(d[k], v)
+                    else:
+                        d[k] = v
+            merge(raw, updates)
+            cfg._path.write_text(yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False), encoding="utf-8")
             from . import config as config_mod
             new_cfg = config_mod.load()
-            for k in ("music_dir","data_dir","ncm_api_url","cron","discover_daily_limit",
-                      "dl_sources","dl_interval","dl_quality","dl_sources_timeout",
-                      "title_threshold","max_duration_diff","run_on_startup",
-                      "web_host","web_port"):
-                setattr(cfg, k, getattr(new_cfg, k))
+            for at in ("music_dir","data_dir","ncm_api_url","cron","discover_daily_limit",
+                       "dl_sources","dl_interval","dl_quality","dl_sources_timeout",
+                       "title_threshold","max_duration_diff","run_on_startup",
+                       "web_host","web_port"):
+                setattr(cfg, at, getattr(new_cfg, at))
             cfg.navidrome = new_cfg.navidrome
             cfg.sources = new_cfg.sources
+            if cfg.netease_cookie != new_cfg.netease_cookie:
+                cfg.netease_cookie = new_cfg.netease_cookie
+                jobs.set_cookie(cfg.netease_cookie)
             if scheduler:
                 try:
                     parts = cfg.cron.split()

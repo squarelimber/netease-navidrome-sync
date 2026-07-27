@@ -96,6 +96,8 @@ def load() -> Config:
     cfg_path = _find_config_file()
     with open(cfg_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
+        if not isinstance(raw, dict):
+            raw = {}
 
     data_dir = Path(raw.get("data_dir", "/app/data"))
     music_dir = Path(raw.get("music_dir", "/music"))
