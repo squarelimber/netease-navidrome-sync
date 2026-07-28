@@ -95,7 +95,7 @@ PAGE = """<!DOCTYPE html>
   .tab-btn.active { color:#fff; border-bottom-color:var(--accent); }
   .tab-btn:hover:not(.active) { color:#aabbdd; }
   .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:99; }
-  .modal-content { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:24px; max-width:700px; width:90%; max-height:80vh; }
+  .modal-content { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:24px; max-width:700px; width:90%; max-height:80vh; overflow:auto; }
   .modal textarea { background:#0b1020; border:1px solid var(--line); border-radius:8px; color:#dfe6f0; font-family:monospace; font-size:13px; padding:12px; width:100%; height:50vh; resize:vertical; }
   .cfg-group { display:flex; flex-direction:column; gap:3px; flex:1; min-width:100px; margin-bottom:10px; }
   .cfg-group label { font-size:12px; color:var(--muted); }

@@ -5,6 +5,8 @@ services:
     environment:
       - ENABLE_GENERAL_UNBLOCK=true
       - ENABLE_FLAC=true
+    ports:
+      - "8679:3000"
     restart: unless-stopped
 
   navidrome-sync:
