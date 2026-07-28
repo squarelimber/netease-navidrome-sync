@@ -446,6 +446,16 @@ setInterval(load, 30000);
 """
 
 
+def _live_cookie_ok(jobs) -> bool | None:
+    """实时校验 Cookie 状态（缓存为 None 或可疑时重新验证）。"""
+    if not jobs.last_cookie_ok:
+        try:
+            jobs.last_cookie_ok = jobs.ncm.check_cookie()
+        except Exception:
+            pass
+    return jobs.last_cookie_ok
+
+
 def create_app(cfg, db, jobs, scheduler=None):
     app = FastAPI(title="navidrome-sync")
 
@@ -469,7 +479,7 @@ def create_app(cfg, db, jobs, scheduler=None):
             except Exception:
                 last_stats = {}
         return {
-            "cookie_ok": jobs.last_cookie_ok,
+            "cookie_ok": _live_cookie_ok(jobs),
             "dl_sources": cfg.dl_sources,
             "enabled_sources": enabled,
             "next_run": next_run,

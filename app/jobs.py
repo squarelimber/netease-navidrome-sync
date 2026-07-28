@@ -54,7 +54,14 @@ class Jobs:
         self._abort.set()
 
     def set_cookie(self, cookie: str):
-        """热更新网易云 Cookie 并持久化到 cookie 文件。"""
+        """热更新网易云 Cookie 并持久化到 cookie 文件。清洗掉 Path/HttpOnly 等属性。"""
+        import re
+        pairs = re.findall(r'([A-Za-z_][A-Za-z0-9_]*)=([^;]+)', cookie)
+        clean = "; ".join(f"{k}={v.strip()}" for k, v in pairs
+                          if k not in ('Path', 'Max-Age', 'HttpOnly', 'Expires',
+                                       'Domain', 'Secure', 'SameSite', 'Age'))
+        if clean:
+            cookie = clean
         self.ncm.set_cookie(cookie)
         try:
             (self.cfg.data_dir / "cookie.txt").write_text(cookie, encoding="utf-8")
