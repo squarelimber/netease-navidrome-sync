@@ -54,7 +54,7 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
    cp config.example.yaml config.yaml
    # 编辑 config.yaml：修改音乐目录路径等
    ```
-4. 修改 `docker-compose.yml` 里的 **`/path/to/your/music`** 为你的真实音乐目录（与 Navidrome 挂载的**同一目录**）
+4. 修改 `docker-compose.yml` 里的 **`/path/to/your/music`** 为你的真实音乐目录（与 Navidrome 挂载的**同一目录**）；ncm-api 会暴露 `8679` 端口供调试用（内部通信走 Docker 网络不受影响）
 5. 构建并启动：
    ```bash
    docker compose up -d --build
@@ -140,7 +140,7 @@ music/
 - 四类曲目统计（已下载/已存在/失败/待处理）
 - 搜索下载 + 排行榜浏览
 - 网易云扫码登录
-- **配置编辑器 ⚙**：点击标题旁的 ⚙ 按钮，直接编辑 YAML 配置，保存后热重载（无需重启）
+- **配置编辑器 ⚙**：点击 ⚙ 打开表单编辑 Navidrome/推荐源/下载等关键项，保存后热重载；Cookie 变更自动校验
 - 最近运行记录（已下/跳过/失败数量 + 耗时）
 - 最近入库列表（可滚动）
 - 失败/重试队列（可滚动），逐条重试
