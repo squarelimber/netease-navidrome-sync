@@ -74,8 +74,8 @@ class ListenBrainzSource(Source):
         self.session = _retry_session()
         self.mb_limiter = RateLimiter(1.1)
 
-    def _get(self, url: str, timeout: int = 20):
-        return self.session.get(url, timeout=timeout)
+    def _get(self, url: str, timeout: int = 20, **kwargs):
+        return self.session.get(url, timeout=timeout, **kwargs)
 
     # ---- 主路径：官方每周歌单 ----
 
