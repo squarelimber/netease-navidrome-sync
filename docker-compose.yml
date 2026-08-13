@@ -14,8 +14,8 @@ services:
     build:
       context: .
       args:
-        # 国内网络 pip 下载慢时，取消注释换镜像源（构建更快）
-        # PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+        # 国内网络 pip 下载慢时，把下面值改为镜像源，如 https://pypi.tuna.tsinghua.edu.cn/simple
+        PIP_INDEX_URL: ""
     container_name: navidrome-sync
     depends_on:
       - ncm-api
