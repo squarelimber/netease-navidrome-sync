@@ -20,7 +20,8 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
 
 - **三源推荐聚合**：网易云每日推荐（30 首/天）、ListenBrainz 协同过滤 + 官方每周歌单、Last.fm 常听/最爱的相似曲目
 - **指定网易云歌单同步**：持续同步"我喜欢的音乐"等歌单到 Navidrome
-- **多源下载链**：基于 [musicdl](https://github.com/CharlesPikachu/musicdl) 的多平台下载（网易云→酷我→咪咕→波点→QQ），单源失败自动降级
+- **多源下载链**：基于 [musicdl](https://github.com/CharlesPikachu/musicdl) 的多平台下载（网易云→酷我→咪咕→波点→QQ），单源失败自动降级；`ytdlp` 兜底源（YouTube 搜索匹配，专治各平台无源的 VIP 曲目），默认置于源链首位
+- **繁简自动归一**：匹配与去重前自动将繁体转为简体（opencc），繁体歌单/曲库元数据不再失配
 - **网易云扫码登录**：状态页点"显示二维码"用 App 扫码登录，自动注入 Cookie
 - **搜索下载**：状态页搜索歌手/歌名，一键下载
 - **排行榜浏览**：热歌榜/新歌榜/原创榜/飙升榜/电音榜/抖音榜，每首可下载
@@ -85,7 +86,7 @@ docker compose up -d --build
 | `sources.netease_playlists.playlists` | 要同步的歌单列表 |
 | `sources.listenbrainz.username` | ListenBrainz 用户名 |
 | `sources.lastfm` | Last.fm API Key + 用户名 |
-| `download.sources` | musicdl 下载源链顺序 |
+| `download.sources` | 下载源链顺序，默认 `ytdlp` 优先（YouTube 兼容性最好），musicdl 各源作后备（镜像已内置 FFmpeg） |
 | `discover_daily_limit` | 每日新增推荐曲上限 |
 | `schedule.cron` | 每日任务时间，默认 `30 4 * * *` |
 | `web.port` | 状态页端口，默认 8678 |

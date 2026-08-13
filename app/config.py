@@ -108,7 +108,7 @@ def load() -> Config:
         netease_cookie=cookie,
         sources=sources,
         discover_daily_limit=int(raw.get("discover_daily_limit", 40)),
-        dl_sources=list(dl.get("sources", ["netease", "kuwo", "migu", "bodian", "qq"])),
+        dl_sources=list(dl.get("sources", ["ytdlp", "netease", "kuwo", "migu", "bodian", "qq"])),
         dl_interval=float(dl.get("interval_seconds", 2.0)),
         title_threshold=int(dl.get("title_threshold", 85)),
         max_duration_diff=int(dl.get("max_duration_diff", 12)),

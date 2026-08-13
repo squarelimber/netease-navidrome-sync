@@ -6,6 +6,12 @@ import sys
 import time
 import unicodedata
 
+try:
+    from opencc import OpenCC
+    _t2s = OpenCC("t2s")
+except Exception:
+    _t2s = None
+
 ILLEGAL_CHARS = r'[\\/*?:"<>|]'
 _logger_initialized = False
 
@@ -43,10 +49,16 @@ _NOISE_PATTERNS = [
 
 
 def normalize(text: str) -> str:
-    """归一化歌曲/歌手名用于匹配与去重。"""
+    """归一化歌曲/歌手名用于匹配与去重（含繁简转换）。"""
     if not text:
         return ""
-    text = unicodedata.normalize("NFKC", str(text)).lower()
+    text = unicodedata.normalize("NFKC", str(text))
+    if _t2s is not None:
+        try:
+            text = _t2s.convert(text)
+        except Exception:
+            pass
+    text = text.lower()
     for pat in _NOISE_PATTERNS:
         text = re.sub(pat, " ", text)
     text = re.sub(r"[^\w\s一-鿿぀-ヿ가-힯]", " ", text)

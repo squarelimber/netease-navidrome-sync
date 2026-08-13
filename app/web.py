@@ -362,7 +362,7 @@ function showConfig() {
     setCb('c-lf-en', y.sources?.lastfm?.enabled);
     setVal('c-lf-k', y.sources?.lastfm?.api_key); setVal('c-lf-u', y.sources?.lastfm?.username);
     setCb('c-dd-en', y.sources?.netease_daily?.enabled); setCb('c-pl-en', y.sources?.netease_playlists?.enabled);
-    const srcs = ['netease','kuwo','migu','bodian','qq'];
+    const srcs = ['ytdlp','netease','kuwo','migu','bodian','qq'];
     const act = (y.download?.sources || []);
     document.getElementById('c-dl-srcs').innerHTML = srcs.map(s =>
       `<label class="cfg-cb" style="margin-right:8px"><input type="checkbox" value="${s}" ${act.includes(s)?'checked':''}> ${s}</label>`

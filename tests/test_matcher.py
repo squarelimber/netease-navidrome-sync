@@ -29,6 +29,16 @@ class TestNormalize:
         assert track_key(["Jay Chou"], "晴天") == track_key(["jay chou"], "晴天")
         assert track_key(["A"], "B") != track_key(["A"], "C")
 
+    def test_t2s_conversion(self):
+        assert normalize("周杰倫") == normalize("周杰伦")
+        assert normalize("陳奕迅 淘汰") == normalize("陈奕迅 淘汰")
+        assert track_key(["周杰倫"], "红尘客栈") == track_key(["周杰伦"], "红尘客栈")
+
+    def test_t2s_matcher(self):
+        track = t("淘汰", ["陳奕迅"])
+        cand = {"name": "淘汰", "artists": ["陈奕迅"]}
+        assert matcher.is_match(track, cand)
+
 
 class TestMatcher:
     def test_exact_match(self):

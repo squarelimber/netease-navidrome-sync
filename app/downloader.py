@@ -7,20 +7,24 @@
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import re
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 import requests
+from rapidfuzz import fuzz as _rapidfuzz
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import APIC, ID3, TALB, TIT2, TPE1, USLT, error as ID3error
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
 
 from . import matcher
-from .util import RateLimiter
+from .util import RateLimiter, normalize
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +38,15 @@ SOURCE_CLIENTS = {
     "kugou": "KugouMusicClient",
     "qianqian": "QianqianMusicClient",
 }
+
+# yt-dlp 兜底源（非 musicdl 客户端，走 subprocess 调用）
+YTDLP_SOURCE = "ytdlp"
+
+VALID_SOURCES = set(SOURCE_CLIENTS) | {YTDLP_SOURCE}
+
+# yt-dlp 搜索候选数 / 单曲下载超时
+_YTDLP_SEARCH_COUNT = 5
+_YTDLP_TIMEOUT = 240
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
@@ -69,7 +82,7 @@ class MusicDLEngine:
 
     def __init__(self, sources: list[str], work_dir: Path, netease_cookie: str = "",
                  title_threshold: int = 85, max_duration_diff: int = 12, interval: float = 2.0):
-        self.sources = [s for s in sources if s in SOURCE_CLIENTS]
+        self.sources = [s for s in sources if s in VALID_SOURCES]
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.netease_cookie = netease_cookie
@@ -82,7 +95,7 @@ class MusicDLEngine:
                       max_duration_diff: int | None = None, interval: float | None = None):
         """热更新下载参数，并重置已缓存的客户端（下次下载时按新配置重建）。"""
         if sources is not None:
-            self.sources = [s for s in sources if s in SOURCE_CLIENTS]
+            self.sources = [s for s in sources if s in VALID_SOURCES]
         if title_threshold is not None:
             self.title_threshold = title_threshold
         if max_duration_diff is not None:
@@ -155,6 +168,8 @@ class MusicDLEngine:
         }
 
     def _download_from_source(self, track, source: str) -> Path | None:
+        if source == YTDLP_SOURCE:
+            return self._download_ytdlp(track)
         client = self._get_client(source)
         if client is None:
             return None
@@ -198,6 +213,114 @@ class MusicDLEngine:
             if path:
                 return path, source
         raise DownloadError("所有下载源均失败")
+
+    # ---------- yt-dlp 兜底源 ----------
+
+    @staticmethod
+    def _run_ytdlp(args: list[str], timeout: int = _YTDLP_TIMEOUT) -> subprocess.CompletedProcess:
+        """以模块方式调用 yt-dlp（不依赖 PATH 上的可执行文件）。"""
+        return subprocess.run(
+            [sys.executable, "-m", "yt_dlp", "--no-warnings", *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+
+    def _ytdlp_search(self, query: str) -> list[dict]:
+        """YouTube 搜索候选，返回 [{id, title, duration(秒)}]。"""
+        proc = self._run_ytdlp(
+            ["-J", "--flat-playlist", "--skip-download", f"ytsearch{_YTDLP_SEARCH_COUNT}:{query}"],
+            timeout=60,
+        )
+        if proc.returncode != 0:
+            log.warning("yt-dlp 搜索失败: %s", (proc.stderr or "").strip()[:200])
+            return []
+        try:
+            data = json.loads(proc.stdout)
+        except ValueError:
+            return []
+        out = []
+        for e in (data.get("entries") or []):
+            if not isinstance(e, dict) or not e.get("id"):
+                continue
+            dur = e.get("duration") or 0
+            try:
+                dur = float(dur)
+            except (TypeError, ValueError):
+                dur = 0
+            out.append({"id": str(e["id"]), "title": str(e.get("title") or ""), "duration": dur})
+        return out
+
+    def _pick_ytdlp_candidate(self, track, entries: list[dict]) -> dict | None:
+        """从 YouTube 候选中挑出匹配曲目：标题分 + 歌手 + 时长三重校验。"""
+        best = []
+        for e in entries:
+            title = (e.get("title") or "").strip()
+            if not title:
+                continue
+            # 拆 "歌手 - 歌名"；拆不出则整串参与标题匹配
+            parts = re.split(r"\s*[-–—]\s*", title, maxsplit=1)
+            if len(parts) == 2 and parts[0] and parts[1]:
+                cand_artists, cand_title = [parts[0]], parts[1]
+                score = matcher.title_score(track.title, cand_title)
+            else:
+                cand_artists, cand_title = [], title
+                # 无分隔符：容忍标题里的额外噪音词（如"无损纯享"），用 token_set_ratio
+                score = max(matcher.title_score(track.title, title),
+                            _rapidfuzz.token_set_ratio(normalize(track.title), normalize(title)))
+            if score < self.title_threshold:
+                continue
+            if cand_artists and not matcher.artist_match(track.artists, cand_artists):
+                continue
+            dur = e.get("duration") or 0
+            if (track.duration_ms and dur
+                    and abs(track.duration_ms - dur * 1000) > self.max_duration_diff * 1000):
+                continue
+            best.append((score, e))
+        if not best:
+            return None
+        best.sort(key=lambda x: x[0], reverse=True)
+        return best[0][1]
+
+    def _download_ytdlp(self, track) -> Path | None:
+        query = f"{track.artists[0] if track.artists else ''} {track.title}".strip()
+        work = self.work_dir / YTDLP_SOURCE
+        work.mkdir(parents=True, exist_ok=True)
+        try:
+            entries = self._ytdlp_search(query)
+        except Exception as e:
+            log.warning("yt-dlp 不可用（%s）", e)
+            return None
+        hit = self._pick_ytdlp_candidate(track, entries)
+        if not hit:
+            log.info("yt-dlp 无有效匹配: %s", query)
+            return None
+        vid = hit["id"]
+        try:
+            proc = self._run_ytdlp([
+                "-f", "bestaudio/best",
+                "-x", "--audio-format", "mp3", "--audio-quality", "0",
+                "--no-playlist",
+                "-o", str(work / "%(id)s.%(ext)s"),
+                "--", f"https://www.youtube.com/watch?v={vid}",
+            ])
+        except subprocess.TimeoutExpired:
+            log.warning("yt-dlp 下载超时: %s", query)
+            return None
+        except Exception as e:
+            log.warning("yt-dlp 下载失败 %s: %s", query, e)
+            return None
+        if proc.returncode != 0:
+            log.warning("yt-dlp 下载失败(%s): %s", proc.returncode,
+                        (proc.stderr or "").strip()[:200])
+            return None
+        files = [p for p in work.glob(f"{vid}.*") if p.is_file()]
+        if not files:
+            log.warning("yt-dlp 下载后未找到产物: %s", vid)
+            return None
+        save_path = max(files, key=lambda p: p.stat().st_size)
+        if save_path.stat().st_size < 100 * 1024:
+            log.warning("yt-dlp 下载文件无效: %s", save_path)
+            return None
+        return save_path
 
 
 # ---------------- 元数据内嵌 ----------------
