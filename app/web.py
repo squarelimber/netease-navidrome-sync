@@ -1,5 +1,7 @@
 """状态页：FastAPI 单页应用 + JSON API。"""
 
+from __future__ import annotations
+
 import json
 import logging
 import threading

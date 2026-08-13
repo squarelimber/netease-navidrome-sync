@@ -1,5 +1,7 @@
 """每日任务编排：推荐聚合 -> 去重 -> 匹配 -> 下载 -> 入库 -> 歌单文件。"""
 
+from __future__ import annotations
+
 import json
 import logging
 import os

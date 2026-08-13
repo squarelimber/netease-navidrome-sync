@@ -4,6 +4,8 @@
 下载后统一用 mutagen 重写标签（标题/歌手/专辑/封面/歌词）。
 """
 
+from __future__ import annotations
+
 import logging
 import re
 import shutil

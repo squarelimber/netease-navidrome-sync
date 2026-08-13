@@ -1,5 +1,7 @@
 """曲库组织：文件落盘、m3u8 歌单生成、Navidrome(Subsonic API) 查重。"""
 
+from __future__ import annotations
+
 import hashlib
 import logging
 import secrets

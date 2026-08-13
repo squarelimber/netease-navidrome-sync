@@ -3,6 +3,8 @@
 将 app/netease/ 中的全部网易云操作委托给 api-enhanced 后端。
 """
 
+from __future__ import annotations
+
 import logging
 
 import requests
@@ -137,7 +139,11 @@ class NCMAPIClient:
         if not self._cookie:
             return False
         j = self._get("/login/status")
-        return j.get("code") == 200 and bool((j.get("data") or {}).get("account"))
+        data = j.get("data") or {}
+        # api-enhanced 返回 {data: {code: 200, account, profile}}（顶层无 code），
+        # 其他 fork 可能是顶层 code，两种都兼容
+        ok = j.get("code") == 200 or data.get("code") == 200
+        return ok and bool(data.get("account") or data.get("profile"))
 
     # ------- 听歌打卡 -------
 
