@@ -31,157 +31,284 @@ PAGE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Navidrome Sync</title>
 <style>
-  :root { color-scheme: dark; --bg:#0b1020; --card:#141b2e; --line:#243049;
-          --muted:#8b97b3; --accent:#5b8cff; --ok:#34d399; --bad:#f87171;
-          --warn:#fbbf24; --blue:#60a5fa; --radius:12px; }
+  :root { color-scheme: dark;
+    --bg:#0a0d17; --panel:rgba(255,255,255,.04); --line:rgba(255,255,255,.08);
+    --txt:#e8edf6; --muted:#8a94ad;
+    --accent:#6d8dff; --accent2:#9a6bff;
+    --ok:#3ddc97; --bad:#ff6b6b; --warn:#ffc24b; --info:#5ad1ff;
+    --r:16px; }
   * { box-sizing:border-box; }
-  body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-         background:linear-gradient(180deg,#0b1020,#0a0f1d 60%); color:#e6edf6;
-         margin:0; padding:28px 32px 60px; min-height:100vh; }
-  h1 { font-size:22px; margin:0 0 2px; letter-spacing:.5px; }
-  h1 span { color:var(--accent); }
-  .sub { color:var(--muted); font-size:13px; margin-bottom:22px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
-          padding:18px; box-shadow:0 6px 24px rgba(0,0,0,.25); }
-  .card h2 { font-size:13px; margin:0 0 14px; color:#9bb6ff; font-weight:600;
-             text-transform:uppercase; letter-spacing:.8px; }
-  .row { display:flex; gap:10px; flex-wrap:wrap; }
-  .kv { font-size:13px; line-height:1.9; color:#cdd6e6; }
-  .kv b { color:#fff; font-weight:600; }
-  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
-  .stat { text-align:center; padding:6px 10px; min-width:78px; }
-  .stat .n { font-size:26px; font-weight:700; line-height:1; }
-  .stat .l { font-size:11px; color:var(--muted); margin-top:4px; }
-  .n.ok { color:var(--ok); } .n.bad { color:var(--bad); }
-  .n.blue { color:var(--blue); } .n.warn { color:var(--warn); }
-  .scroll { max-height:380px; overflow:auto; border-radius:8px; }
-  .scroll::-webkit-scrollbar { width:8px; height:8px; }
-  .scroll::-webkit-scrollbar-thumb { background:#2a3650; border-radius:8px; }
-  .scroll::-webkit-scrollbar-thumb:hover { background:#36466a; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
-  th { color:var(--muted); font-weight:500; font-size:12px; position:sticky; top:0;
-       background:var(--card); z-index:1; }
-  tr:hover td { background:rgba(91,140,255,.06); }
-  button { background:var(--accent); color:#fff; border:0; border-radius:8px;
-           padding:9px 18px; cursor:pointer; font-size:13px; font-weight:500;
-           transition:filter .15s,opacity .15s; }
-  button:hover { filter:brightness(1.1); }
-  button:disabled { background:#33415a; cursor:not-allowed; }
-  button.secondary { background:#2a3650; }
-  button.danger { background:#7f1d1d; }
-  button.small { padding:3px 10px; font-size:12px; background:#2a3650; }
-  .pill { display:inline-block; padding:1px 9px; border-radius:99px; font-size:11px;
-          font-weight:600; margin-right:4px; }
-  .pill.downloaded { background:#064e3b; color:#6ee7b7; }
-  .pill.existed { background:#1e3a8a; color:#93c5fd; }
-  .pill.failed { background:#7f1d1d; color:#fca5a5; }
-  .pill.dead { background:#3b1d1d; color:#9a7a7a; }
-  .pill.skipped { background:#3b3f4a; color:#cbd5e1; }
-  .pill.retried { background:#78350f; color:#fcd34d; }
-  .pill.src { background:#1e293b; color:#94a3b8; }
+  body { margin:0; min-height:100vh; color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",sans-serif;
+    background:
+      radial-gradient(1100px 520px at 85% -10%, rgba(109,141,255,.16), transparent 60%),
+      radial-gradient(900px 480px at -15% 25%, rgba(154,107,255,.12), transparent 55%),
+      var(--bg);
+    background-attachment:fixed; }
+  ::-webkit-scrollbar { width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb { background:rgba(148,163,200,.18); border-radius:8px; }
+  ::-webkit-scrollbar-thumb:hover { background:rgba(148,163,200,.32); }
+  .hide { display:none !important; }
   .muted { color:var(--muted); }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+
+  /* ---------- 顶栏 ---------- */
+  .topbar { position:sticky; top:0; z-index:50; display:flex; align-items:center;
+    justify-content:space-between; gap:12px; padding:13px 28px;
+    background:rgba(10,13,23,.75); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
+    border-bottom:1px solid var(--line); }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .logo { width:40px; height:40px; border-radius:12px; flex:0 0 auto;
+    background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:19px;
+    box-shadow:0 6px 18px rgba(109,141,255,.35); }
+  .brand-name { font-size:15.5px; font-weight:700; letter-spacing:.3px; line-height:1.2; }
+  .brand-name span { background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .brand-sub { font-size:11px; color:var(--muted); margin-top:2px; }
+  .topbar-right { display:flex; align-items:center; gap:10px; }
+
+  /* ---------- 布局 ---------- */
+  main { max-width:1180px; margin:0 auto; padding:26px 28px 8px;
+    display:flex; flex-direction:column; gap:18px; }
+  .grid-two { display:grid; grid-template-columns:1.35fr 1fr; gap:18px; }
+  .grid-three { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }
+  @media (max-width:920px) { .grid-two,.grid-three { grid-template-columns:1fr; } }
+  .footer { text-align:center; color:#5a6480; font-size:12px; padding:26px 0 12px; }
+
+  /* ---------- 卡片 ---------- */
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+    padding:20px 22px; backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    box-shadow:0 12px 32px rgba(0,0,0,.28); animation:fadeUp .4s ease both; }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  .card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px; }
+  .card-head h2 { font-size:12.5px; font-weight:600; color:#a9b8e0; letter-spacing:.7px;
+    text-transform:uppercase; margin:0; }
+  .card-tip { font-size:11.5px; color:var(--muted); }
+
+  /* ---------- 按钮 ---------- */
+  .btn { display:inline-flex; align-items:center; gap:6px; border:0; cursor:pointer;
+    background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff;
+    border-radius:10px; padding:9px 16px; font-size:13px; font-weight:600;
+    transition:all .18s ease; box-shadow:0 6px 18px rgba(109,141,255,.25); }
+  .btn:hover { transform:translateY(-1px); filter:brightness(1.07); box-shadow:0 10px 26px rgba(109,141,255,.38); }
+  .btn:active { transform:none; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; transform:none; filter:grayscale(.4); }
+  .btn.ghost { background:rgba(255,255,255,.05); border:1px solid var(--line);
+    box-shadow:none; color:#c6d0e4; }
+  .btn.ghost:hover { background:rgba(255,255,255,.09); box-shadow:none; }
+  .btn.danger { background:linear-gradient(135deg,#e5484d,#b91c1c);
+    box-shadow:0 6px 18px rgba(229,72,77,.25); }
+  .btn.sm { padding:6px 12px; font-size:12px; border-radius:8px; }
+  .btn.sm.ghost { background:rgba(255,255,255,.04); }
+
+  /* ---------- 徽标 ---------- */
+  .pill { display:inline-flex; align-items:center; gap:7px; padding:4px 12px; border-radius:99px;
+    font-size:12px; font-weight:600; background:rgba(255,255,255,.06);
+    border:1px solid var(--line); color:#c6d0e4; }
+  .pill i { width:7px; height:7px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .pill-ok { color:var(--ok); border-color:rgba(61,220,151,.3); background:rgba(61,220,151,.08); }
+  .pill-bad { color:var(--bad); border-color:rgba(255,107,107,.3); background:rgba(255,107,107,.08); }
+  .pill-run { color:var(--info); border-color:rgba(90,209,255,.3); background:rgba(90,209,255,.08); }
+  .spill { display:inline-flex; align-items:center; padding:2px 9px; border-radius:99px;
+    font-size:11px; font-weight:600; margin:0 4px 4px 0; }
+  .spill.downloaded { background:rgba(61,220,151,.12); color:#6ee7b7; }
+  .spill.existed { background:rgba(90,209,255,.12); color:#93d7ff; }
+  .spill.failed { background:rgba(255,107,107,.12); color:#fca5a5; }
+  .spill.dead { background:rgba(148,163,200,.12); color:#9aa5bd; }
+  .spill.skipped { background:rgba(148,163,200,.10); color:#aab4cb; }
+  .spill.retried { background:rgba(255,194,75,.12); color:#fcd34d; }
+  .spill.src { background:rgba(154,107,255,.12); color:#c4a7ff; }
+
+  /* ---------- 状态卡 ---------- */
+  .kv { display:flex; flex-direction:column; gap:10px; font-size:13px; }
+  .kv-row { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+  .kv-row .k { color:var(--muted); }
+  .kv-row .v { font-weight:600; text-align:right; }
+  .bar { display:flex; gap:10px; margin-top:16px; align-items:center; flex-wrap:wrap; }
+  .run-state { font-size:12.5px; color:var(--warn); min-height:16px; margin-top:10px; }
+
+  /* ---------- 统计 ---------- */
+  .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(92px,1fr)); gap:12px; }
+  .stat { background:rgba(255,255,255,.03); border:1px solid var(--line); border-radius:14px;
+    padding:16px 10px; text-align:center; transition:transform .18s ease; }
+  .stat:hover { transform:translateY(-2px); }
+  .stat .n { font-size:26px; font-weight:700; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .stat .l { font-size:11px; color:var(--muted); margin-top:6px; }
+  .c-ok { color:var(--ok); } .c-bad { color:var(--bad); } .c-warn { color:var(--warn); }
+  .c-info { color:var(--info); } .c-muted { color:var(--muted); }
+
+  /* ---------- 表格 ---------- */
+  .tbl-wrap { max-height:420px; overflow:auto; border-radius:10px; border:1px solid var(--line); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); }
+  tr:last-child td { border-bottom:0; }
+  th { color:var(--muted); font-weight:500; font-size:11.5px; position:sticky; top:0;
+    background:#131828; z-index:1; text-transform:uppercase; letter-spacing:.4px; }
+  tr:hover td { background:rgba(109,141,255,.05); }
   .run-stats { font-size:12px; }
-  .bar { display:flex; gap:12px; margin-top:14px; align-items:center; flex-wrap:wrap; }
-  #run-state { font-size:13px; color:var(--warn); }
-  .qr-box { text-align:center; }
-  .qr-box img, .qr-box svg { max-width:220px; border-radius:8px; background:#fff; padding:8px; }
-  .qr-tip { font-size:12px; color:var(--muted); margin-top:8px; }
-  .hide { display:none; }
-  .input { background:#0f1a33; border:1px solid var(--line); border-radius:8px; padding:9px 12px;
-           color:#fff; font-size:13px; width:100%; margin-bottom:8px; }
+
+  /* ---------- 输入 ---------- */
+  .input { width:100%; background:rgba(8,11,20,.6); border:1px solid var(--line);
+    border-radius:10px; padding:10px 14px; color:var(--txt); font-size:13px;
+    outline:none; transition:border-color .15s, box-shadow .15s; }
+  .input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(109,141,255,.15); }
   .input::placeholder { color:#5a6a88; }
-  .input-group { margin-bottom:6px; }
-  .input-group label { display:block; font-size:12px; color:var(--muted); margin-bottom:3px; }
-  .tab-btn { background:transparent; color:var(--muted); border:0; padding:8px 20px;
-             font-size:13px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
-  .tab-btn.active { color:#fff; border-bottom-color:var(--accent); }
-  .tab-btn:hover:not(.active) { color:#aabbdd; }
-  .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:99; }
-  .modal-content { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:24px; max-width:700px; width:90%; max-height:80vh; overflow:auto; }
-  .modal textarea { background:#0b1020; border:1px solid var(--line); border-radius:8px; color:#dfe6f0; font-family:monospace; font-size:13px; padding:12px; width:100%; height:50vh; resize:vertical; }
-  .cfg-group { display:flex; flex-direction:column; gap:3px; flex:1; min-width:100px; margin-bottom:10px; }
+  .search-bar { display:flex; gap:10px; margin-bottom:12px; }
+  .search-bar .input { flex:1; }
+  .search-status { font-size:12.5px; color:var(--muted); min-height:18px; margin-bottom:8px; }
+
+  /* ---------- 登录门 ---------- */
+  .gate { position:fixed; inset:0; z-index:100; display:flex; align-items:center;
+    justify-content:center; background:rgba(7,9,16,.86); backdrop-filter:blur(20px);
+    -webkit-backdrop-filter:blur(20px); transition:opacity .35s ease, visibility .35s; }
+  .gate.gate-hide { opacity:0; visibility:hidden; pointer-events:none; }
+  .gate-card { width:min(420px,92vw); background:linear-gradient(180deg,rgba(30,38,64,.92),rgba(18,23,42,.94));
+    border:1px solid var(--line); border-radius:22px; padding:40px 32px 30px;
+    text-align:center; box-shadow:0 30px 80px rgba(0,0,0,.5); animation:fadeUp .35s ease; }
+  .logo-big { width:64px; height:64px; margin:0 auto 18px; border-radius:18px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; font-size:30px;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 10px 30px rgba(109,141,255,.35); }
+  .gate-title { font-size:22px; margin:0 0 6px; font-weight:700; }
+  .gate-sub { color:var(--muted); font-size:13px; line-height:1.7; margin:0 0 22px; }
+  .qr-img img { width:200px; height:200px; border-radius:14px; background:#fff; padding:8px;
+    margin:16px auto 0; display:block; animation:fadeUp .3s ease; }
+  .qr-tip { font-size:12.5px; color:var(--muted); margin-top:12px; min-height:18px; }
+  .link-btn { background:none; border:0; color:var(--accent); cursor:pointer; font-size:12.5px;
+    margin-top:18px; opacity:.85; }
+  .link-btn:hover { opacity:1; text-decoration:underline; }
+
+  /* ---------- 弹窗 ---------- */
+  .modal { position:fixed; inset:0; z-index:90; background:rgba(5,7,14,.7);
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    display:flex; align-items:center; justify-content:center; animation:fadeIn .2s ease; }
+  @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+  .modal-content { width:min(720px,94vw); max-height:86vh; overflow:auto;
+    background:linear-gradient(180deg,#161c32,#10152a); border:1px solid var(--line);
+    border-radius:18px; padding:26px 28px; box-shadow:0 30px 90px rgba(0,0,0,.55);
+    animation:fadeUp .25s ease; }
+  .modal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+  .modal-head h2 { font-size:16px; margin:0; }
+  .cfg-sep { font-size:11.5px; color:#8899cc; border-bottom:1px solid var(--line);
+    padding:16px 0 6px; margin:4px 0 12px; text-transform:uppercase; letter-spacing:1px; }
+  .cfg-group { display:flex; flex-direction:column; gap:5px; flex:1; min-width:120px; margin-bottom:12px; }
   .cfg-group label { font-size:12px; color:var(--muted); }
-  .cfg-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
-  .cfg-sep { font-size:12px; color:#8899cc; border-bottom:1px solid var(--line); padding:12px 0 4px; margin:6px 0 10px; text-transform:uppercase; letter-spacing:1px; }
-  .cfg-cb { font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer; }
-  .cfg-cb input[type=checkbox] { width:16px; height:16px; }
+  .cfg-row { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
+  .cfg-cb { font-size:13px; display:flex; align-items:center; gap:7px; cursor:pointer;
+    padding:2px 0; user-select:none; }
+  .cfg-cb input[type=checkbox] { width:15px; height:15px; accent-color:var(--accent); cursor:pointer; }
+  .adv { margin-top:16px; }
+  .adv summary { cursor:pointer; font-size:12.5px; color:var(--muted); }
+  textarea.input.mono { font-family:ui-monospace,Consolas,monospace; font-size:12px;
+    height:220px; margin-top:10px; resize:vertical; }
+
+  /* ---------- Toast ---------- */
+  #toasts { position:fixed; right:20px; bottom:20px; z-index:200;
+    display:flex; flex-direction:column; gap:10px; }
+  .toast { background:rgba(24,30,52,.96); border:1px solid var(--line);
+    border-left:3px solid var(--accent); padding:12px 16px; border-radius:10px;
+    font-size:13px; box-shadow:0 12px 32px rgba(0,0,0,.4);
+    animation:slideIn .25s ease; max-width:340px; }
+  .toast.ok { border-left-color:var(--ok); }
+  .toast.bad { border-left-color:var(--bad); }
+  .toast.warn { border-left-color:var(--warn); }
+  @keyframes slideIn { from { opacity:0; transform:translateX(16px); } to { opacity:1; transform:none; } }
 </style>
 </head>
 <body>
-<h1>🎵 <span>Navidrome Sync</span>
-  <span onclick="showConfig()" style="font-size:16px;cursor:pointer;color:var(--muted);margin-left:10px" title="配置">⚙</span>
-</h1>
-<div class="sub" id="next-run">加载中…</div>
 
-<div class="grid">
-  <div class="card">
-    <h2>运行状态</h2>
-    <div class="kv" id="status"></div>
-    <div class="bar">
-      <button id="run-btn" onclick="triggerRun()">立即运行</button>
-      <button id="stop-btn" class="danger hide" onclick="stopRun()">停止</button>
-      <button id="refresh-btn" class="secondary" onclick="toggleRefresh(true)">暂停自动刷新</button>
-      <span id="run-state"></span>
+<div id="gate" class="gate">
+  <div class="gate-card">
+    <div class="logo-big">♪</div>
+    <h1 class="gate-title">Navidrome Sync</h1>
+    <div id="gate-body">
+      <p class="gate-sub">正在检查登录状态…</p>
+    </div>
+    <button class="link-btn" id="gate-skip" onclick="skipGate()" style="visibility:hidden">跳过登录，先浏览 →</button>
+  </div>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">♪</div>
+    <div>
+      <div class="brand-name">Navidrome <span>Sync</span></div>
+      <div class="brand-sub">曲库自动同步助手</div>
     </div>
   </div>
-
-  <div class="card">
-    <h2>曲目统计</h2>
-    <div class="row" id="stats"></div>
+  <div class="topbar-right">
+    <span id="ck-pill" class="pill"><i></i>检查中…</span>
+    <button class="btn ghost sm hide" id="login-btn" onclick="openGate()">登录</button>
+    <button class="btn ghost sm" onclick="showConfig()">⚙ 设置</button>
   </div>
+</header>
 
-  <div class="card" id="login-card">
-    <h2>网易云扫码登录</h2>
-    <div class="qr-box">
-      <button onclick="qrStart()">显示二维码</button>
-      <div id="qr-img"></div>
-      <div class="qr-tip" id="qr-tip"></div>
+<main>
+  <section class="grid-two">
+    <div class="card">
+      <div class="card-head"><h2>运行状态</h2><span id="run-badge" class="pill"><i></i>空闲</span></div>
+      <div class="kv" id="status"></div>
+      <div class="bar">
+        <button class="btn" id="run-btn" onclick="triggerRun()">▶ 立即运行</button>
+        <button class="btn danger hide" id="stop-btn" onclick="stopRun()">■ 停止</button>
+        <button class="btn ghost" id="refresh-btn" onclick="toggleRefresh()">⏸ 暂停自动刷新</button>
+      </div>
+      <div id="run-state" class="run-state"></div>
     </div>
-  </div>
-</div>
-
-<div class="card" style="margin-top:16px">
-  <div style="display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:14px">
-    <button id="stab-search" class="tab-btn active" onclick="switchSearchTab('search')">搜索</button>
-    <button id="stab-rank" class="tab-btn" onclick="switchSearchTab('rank')">排行榜</button>
-  </div>
-  <div id="stab-search-content">
-    <div style="display:flex;gap:8px;margin-bottom:10px">
-      <input id="search-query" class="input" placeholder="搜歌曲、歌手…" style="flex:1" onkeydown="if(event.key==='Enter')doSearch()">
-      <button onclick="doSearch()" style="flex:0 0 auto">搜索</button>
+    <div class="card">
+      <div class="card-head"><h2>曲目统计</h2></div>
+      <div class="stats-grid" id="stats"></div>
     </div>
-  </div>
-  <div id="stab-rank-content" class="hide">
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="chart-btns"></div>
-  </div>
-  <div id="search-status" class="muted" style="font-size:12px"></div>
-  <div class="scroll" style="max-height:420px"><table id="search-results"></table></div>
-</div>
-</div>
+  </section>
 
-<div class="grid" style="margin-top:16px">
-  <div class="card">
-    <h2>最近运行</h2>
-    <div class="scroll"><table id="runs"></table></div>
-  </div>
-  <div class="card">
-    <h2>最近入库 <span class="muted" style="font-weight:400;text-transform:none">(可滚动)</span></h2>
-    <div class="scroll"><table id="downloaded"></table></div>
-  </div>
-  <div class="card">
-    <h2>失败 / 重试队列 <span class="muted" style="font-weight:400;text-transform:none">(可滚动)</span></h2>
-    <div class="scroll"><table id="failed"></table></div>
-  </div>
-</div>
+  <section class="card">
+    <div class="card-head"><h2>搜索下载</h2><span class="card-tip">搜到即可一键下载入库</span></div>
+    <div class="search-bar">
+      <input id="search-query" class="input" placeholder="搜索歌曲、歌手…"
+             onkeydown="if(event.key==='Enter')doSearch()">
+      <button class="btn" onclick="doSearch()">搜索</button>
+    </div>
+    <div id="search-status" class="search-status"></div>
+    <div class="tbl-wrap"><table id="search-results"></table></div>
+  </section>
+
+  <section class="grid-three">
+    <div class="card">
+      <div class="card-head"><h2>最近运行</h2></div>
+      <div class="tbl-wrap"><table id="runs"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>最近入库</h2></div>
+      <div class="tbl-wrap"><table id="downloaded"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>失败 / 重试队列</h2></div>
+      <div class="tbl-wrap"><table id="failed"></table></div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">netease-navidrome-sync · 仅供个人学习使用</footer>
+
+<div id="toasts"></div>
 
 <script>
 const fmt = ts => ts ? new Date(ts*1000).toLocaleString('zh-CN',{hour12:false}) : '-';
-let autoRefresh = true, qrTimer = null;
+let autoRefresh = true, qrTimer = null, gateDone = false;
 
-function pills(s) {
-  return `<span class="pill ${s}">${({downloaded:'已下',existed:'已有',skipped:'跳过',failed:'失败',dead:'放弃',pending:'待处理'})[s]||s}</span>`;
+function toast(msg, type='') {
+  const box = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  box.appendChild(el);
+  setTimeout(() => { el.style.opacity='0'; el.style.transition='opacity .3s';
+    setTimeout(() => el.remove(), 300); }, 3200);
+}
+
+function spill(s) {
+  return `<span class="spill ${s}">${({downloaded:'已下',existed:'已有',skipped:'跳过',failed:'失败',dead:'放弃',pending:'待处理'})[s]||s}</span>`;
 }
 function statBox(n, label, cls='') {
   return `<div class="stat"><div class="n ${cls}">${n}</div><div class="l">${label}</div></div>`;
@@ -190,40 +317,53 @@ function runSummary(stats) {
   let s = stats || {};
   let html = '';
   for (const k of ['downloaded','existed','skipped','failed','retried']) {
-    if (s[k]) html += `<span class="pill ${k}">${({downloaded:'已下',existed:'已有',skipped:'跳过',failed:'失败',retried:'重试'})[k]} ${s[k]}</span>`;
+    if (s[k]) html += `<span class="spill ${k}">${({downloaded:'已下',existed:'已有',skipped:'跳过',failed:'失败',retried:'重试'})[k]} ${s[k]}</span>`;
   }
   if (s.duration_s) html += `<span class="muted"> ${s.duration_s}s</span>`;
-  if (s.cookie_ok === false) html += `<span class="pill failed">Cookie失效</span>`;
-  if (s.aborted) html += `<span class="pill retried">已中止</span>`;
-  if (s.error) html += `<span class="pill failed">错误</span>`;
+  if (s.cookie_ok === false) html += `<span class="spill failed">Cookie失效</span>`;
+  if (s.aborted) html += `<span class="spill retried">已中止</span>`;
+  if (s.error) html += `<span class="spill failed">错误</span>`;
   return html || '<span class="muted">无数据</span>';
 }
 
 async function load() {
   if (!autoRefresh) return;
-  const st = await (await fetch('/api/status')).json();
-  document.getElementById('next-run').textContent =
-    `下次运行：${st.next_run || '未知'}　·　上次运行：${fmt(st.last_run)}`;
-  const ck = st.cookie_ok;
-  const ckHtml = ck === null ? '<span class="warn">未知</span>'
-    : ck ? '<span class="ok">✓ 有效</span>' : '<span class="bad">✗ 失效/未配置</span>';
+  let st;
+  try { st = await (await fetch('/api/status')).json(); } catch(e) { return; }
+
+  if (!gateDone && st.cookie_ok !== true) showGateLogin();
+  else if (!gateDone) closeGate();
+
+  const ckPill = document.getElementById('ck-pill');
+  const loginBtn = document.getElementById('login-btn');
+  if (st.cookie_ok) {
+    ckPill.className = 'pill pill-ok'; ckPill.innerHTML = '<i></i>网易云已登录';
+    loginBtn.classList.add('hide');
+  } else {
+    ckPill.className = 'pill pill-bad'; ckPill.innerHTML = '<i></i>网易云未登录';
+    loginBtn.classList.remove('hide');
+  }
+
+  const badge = document.getElementById('run-badge');
+  badge.className = 'pill ' + (st.running ? 'pill-run' : '');
+  badge.innerHTML = st.running ? '<i></i>运行中' : '<i></i>空闲';
   document.getElementById('status').innerHTML = `
-    <div>网易云 Cookie：${ckHtml}</div>
-    <div>下载源链：<b>${st.dl_sources.join(' → ')}</b></div>
-    <div>推荐源：<b>${st.enabled_sources.join('、') || '无'}</b></div>
-    <div>听歌同步：${st.scrobble || '<span class="muted">-</span>'}</div>
-    <div>正在运行：<b>${st.running ? '<span class="warn">是</span>' : '否'}</b></div>`;
+    <div class="kv-row"><span class="k">下载源链</span><span class="v">${st.dl_sources.join(' → ')}</span></div>
+    <div class="kv-row"><span class="k">推荐源</span><span class="v">${st.enabled_sources.join('、') || '无'}</span></div>
+    <div class="kv-row"><span class="k">听歌同步</span><span class="v">${st.scrobble || '<span class="muted">-</span>'}</span></div>
+    <div class="kv-row"><span class="k">下次运行</span><span class="v">${st.next_run || '未知'}</span></div>
+    <div class="kv-row"><span class="k">上次运行</span><span class="v">${fmt(st.last_run)}</span></div>`;
   document.getElementById('run-btn').disabled = st.running;
   document.getElementById('stop-btn').classList.toggle('hide', !st.running);
   document.getElementById('run-state').textContent = st.running ? '任务运行中…' : '';
 
   const stats = await (await fetch('/api/stats')).json();
   document.getElementById('stats').innerHTML =
-    statBox(stats.downloaded||0,'已下载','ok') +
-    statBox(stats.existed||0,'已存在','blue') +
-    statBox(stats.failed||0,'失败','bad') +
-    statBox(stats.dead||0,'放弃','bad') +
-    statBox(stats.pending||0,'待处理','warn');
+    statBox(stats.downloaded||0,'已下载','c-ok') +
+    statBox(stats.existed||0,'已存在','c-info') +
+    statBox(stats.failed||0,'失败','c-bad') +
+    statBox(stats.dead||0,'放弃','c-muted') +
+    statBox(stats.pending||0,'待处理','c-warn');
 
   const runs = await (await fetch('/api/runs')).json();
   document.getElementById('runs').innerHTML =
@@ -235,7 +375,7 @@ async function load() {
   document.getElementById('downloaded').innerHTML =
     '<tr><th>曲目</th><th>歌单</th><th>源</th></tr>' + dl.map(t =>
       `<tr><td>${t.artists.join('/')} - ${t.title}</td><td class="muted">${t.playlist||'-'}</td>
-       <td><span class="pill src">${t.download_source}</span></td></tr>`).join('');
+       <td><span class="spill src">${t.download_source}</span></td></tr>`).join('');
 
   const failed = await (await fetch('/api/tracks?status=failed&limit=200')).json();
   const dead = await (await fetch('/api/tracks?status=dead&limit=50')).json();
@@ -245,49 +385,82 @@ async function load() {
       `<tr><td>${t.artists.join('/')} - ${t.title}</td>
        <td class="muted">${t.fail_reason}</td><td>${t.attempts}</td>
        <td class="muted">${fmt(t.next_retry_at)}</td>
-       <td><button class="small" onclick="retry(${t.id})">重试</button></td></tr>`).join('');
+       <td><button class="btn ghost sm" onclick="retry(${t.id})">重试</button></td></tr>`).join('');
 }
 
 async function triggerRun() {
-  if (!confirm('立即执行每日任务？')) return;
   const btn = document.getElementById('run-btn');
-  btn.disabled = true; btn.textContent = '运行中…';
-  await fetch('/api/run', {method:'POST'});
-  setTimeout(load, 1500);
+  if (btn.disabled) return;
+  const r = await (await fetch('/api/run', {method:'POST'})).json();
+  if (r.ok) {
+    btn.disabled = true; btn.textContent = '运行中…';
+    toast('每日任务已开始', 'ok');
+    setTimeout(load, 1500);
+  } else {
+    toast(r.msg || '启动失败', 'bad');
+  }
 }
 async function stopRun() {
-  await fetch('/api/stop', {method:'POST'});
-  document.getElementById('run-state').textContent = '已请求中止…';
+  const r = await (await fetch('/api/stop', {method:'POST'})).json();
+  if (r.ok) toast('已请求中止（下一首曲目前生效）', 'warn');
+  else toast(r.msg || '操作失败', 'bad');
   setTimeout(load, 2000);
 }
-function toggleRefresh(toState) {
+function toggleRefresh() {
   autoRefresh = !autoRefresh;
   const btn = document.getElementById('refresh-btn');
-  btn.textContent = autoRefresh ? '暂停自动刷新' : '恢复自动刷新';
-  btn.classList.toggle('secondary', autoRefresh);
+  btn.textContent = autoRefresh ? '⏸ 暂停自动刷新' : '▶ 恢复自动刷新';
+  btn.classList.toggle('ghost', autoRefresh);
   if (autoRefresh) load();
 }
 async function retry(id) {
-  await fetch(`/api/retry/${id}`, {method:'POST'});
+  await fetch('/api/retry/'+id, {method:'POST'});
+  toast('已加入重试队列', 'ok');
   load();
 }
+
+/* ---------- 登录门 ---------- */
+function showGateLogin() {
+  document.getElementById('gate-body').innerHTML = `
+    <p class="gate-sub">登录网易云后，每天自动拉取日推、同步歌单</p>
+    <button class="btn" onclick="qrStart()">显示二维码</button>
+    <div id="qr-img"></div>
+    <div id="qr-tip" class="qr-tip"></div>`;
+  document.getElementById('gate-skip').style.visibility = 'visible';
+}
+function closeGate() {
+  gateDone = true;
+  document.getElementById('gate').classList.add('gate-hide');
+}
+function skipGate() { closeGate(); }
+function openGate() {
+  gateDone = false;
+  document.getElementById('gate').classList.remove('gate-hide');
+  showGateLogin();
+}
 async function qrStart() {
-  document.getElementById('qr-tip').textContent = '生成二维码…';
+  const tip = document.getElementById('qr-tip');
+  if (!tip) return;
+  tip.innerHTML = '生成二维码…';
   const r = await (await fetch('/api/qr/start')).json();
-  if (!r.ok) { document.getElementById('qr-tip').innerHTML = '<span class="bad">'+r.msg+'</span>'; return; }
+  if (!r.ok) { tip.innerHTML = '<span class="bad">'+r.msg+'</span>'; return; }
   document.getElementById('qr-img').innerHTML = '<img src="'+r.qrimg+'" alt="二维码">';
-  document.getElementById('qr-tip').innerHTML = '请用 <b>网易云音乐 App</b> 扫码';
+  tip.innerHTML = '请用 <b>网易云音乐 App</b> 扫码';
   if (qrTimer) clearInterval(qrTimer);
   qrTimer = setInterval(() => qrPoll(r.key), 2000);
 }
 async function qrPoll(key) {
   const r = await (await fetch('/api/qr/poll?key='+encodeURIComponent(key))).json();
   const tip = document.getElementById('qr-tip');
+  if (!tip) { clearInterval(qrTimer); qrTimer = null; return; }
   if (r.status === 801) tip.innerHTML = '等待扫码…';
-  else if (r.status === 802) tip.innerHTML = '<span class="warn">已扫码，请在手机确认登录</span>';
+  else if (r.status === 802) tip.innerHTML = '<span class="warn">已扫码，请在手机上确认登录</span>';
   else if (r.status === 803) {
-    tip.innerHTML = '<span class="ok">✓ 登录成功，Cookie 已更新</span>';
-    clearInterval(qrTimer); qrTimer = null; load();
+    clearInterval(qrTimer); qrTimer = null;
+    tip.innerHTML = '<span class="ok">✓ 登录成功</span>';
+    toast('网易云登录成功', 'ok');
+    closeGate();
+    load();
   } else if (r.status === 800) {
     tip.innerHTML = '<span class="bad">二维码已过期，请重新生成</span>';
     clearInterval(qrTimer); qrTimer = null;
@@ -295,7 +468,8 @@ async function qrPoll(key) {
     tip.innerHTML = '<span class="bad">扫码不可用 ('+r.status+')</span>';
   }
 }
-var searchTimer = null;
+
+/* ---------- 搜索下载 ---------- */
 async function doSearch() {
   const q = document.getElementById('search-query').value.trim();
   if (!q) return;
@@ -303,55 +477,67 @@ async function doSearch() {
   status.textContent = '搜索中…';
   const r = await (await fetch('/api/search?q='+encodeURIComponent(q)+'&limit=30')).json();
   if (r.error) { status.innerHTML = '<span class="bad">'+r.error+'</span>'; return; }
-  if (!r.length) { status.innerHTML = '无结果'; document.getElementById('search-results').innerHTML = ''; return; }
-  status.innerHTML = '找到 '+r.length+' 首';
+  if (!r.length) { status.textContent = '无结果'; document.getElementById('search-results').innerHTML = ''; return; }
+  status.textContent = '找到 '+r.length+' 首';
   document.getElementById('search-results').innerHTML =
     '<tr><th>曲名</th><th>歌手</th><th>专辑</th><th></th></tr>' +
     r.map(s => {
       const artists = s.artists.join('/');
       return `<tr><td>${s.name}</td><td class="muted">${artists}</td><td class="muted">${s.album||'-'}</td>
-        <td><button class="small" onclick="dlSong('${encodeURIComponent(s.artists[0]||'')}','${encodeURIComponent(s.name)}')">下载</button></td></tr>`;
+        <td><button class="btn ghost sm" onclick="dlSong('${encodeURIComponent(s.artists[0]||'')}','${encodeURIComponent(s.name)}')">下载</button></td></tr>`;
     }).join('');
 }
 async function dlSong(artist, title) {
-  const status = document.getElementById('search-status');
   const a = decodeURIComponent(artist), t = decodeURIComponent(title);
-  status.innerHTML = '下载中: '+a+' - '+t+' …';
+  toast('开始下载: '+a+' - '+t);
   const r = await (await fetch('/api/download', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({artist: a, title: t})})).json();
-  status.innerHTML = r.ok
-    ? '<span class="ok">✓ 下载完成: '+r.file+'</span>'
-    : '<span class="bad">✗ 下载失败: '+(r.msg||'')+'</span>';
+  if (r.ok) toast('✓ 下载完成: '+r.file, 'ok');
+  else toast('✗ 下载失败: '+(r.msg||''), 'bad');
   load();
 }
+
+/* ---------- 配置弹窗 ---------- */
 function showConfig() {
-  const html = `<div style="min-width:600px">
-    <h2 style="margin-bottom:16px">配置</h2>
-    <div class="cfg-group"><label>Navidrome 地址</label><input id="c-nav-url" class="input" placeholder="http://192.168.1.10:4533"></div>
-    <div class="cfg-row"><div class="cfg-group"><label>用户名</label><input id="c-nav-user" class="input"></div>
-      <div class="cfg-group"><label>密码</label><input id="c-nav-pass" class="input" type="password"></div></div>
-
+  const html = `
+    <div class="modal-head"><h2>⚙ 配置</h2><button class="btn ghost sm" onclick="hideModal()">✕ 关闭</button></div>
+    <div class="cfg-sep">Navidrome 查重</div>
+    <div class="cfg-group"><label>地址</label><input id="c-nav-url" class="input" placeholder="http://192.168.1.10:4533"></div>
+    <div class="cfg-row">
+      <div class="cfg-group"><label>用户名</label><input id="c-nav-user" class="input"></div>
+      <div class="cfg-group"><label>密码</label><input id="c-nav-pass" class="input" type="password"></div>
+    </div>
     <div class="cfg-sep">推荐源</div>
-    <div class="cfg-row"><label class="cfg-cb"><input type="checkbox" id="c-lb-en" onchange="cfgToggle('c-lb-un')"> ListenBrainz</label><input id="c-lb-un" class="input" placeholder="用户名" style="width:200px" disabled></div>
-    <div class="cfg-row"><label class="cfg-cb"><input type="checkbox" id="c-lf-en" onchange="cfgToggle('c-lf-k');cfgToggle('c-lf-u')"> Last.fm</label><input id="c-lf-k" class="input" placeholder="API Key" style="width:200px" disabled><input id="c-lf-u" class="input" placeholder="用户名" style="width:160px" disabled></div>
-    <div class="cfg-row"><label class="cfg-cb"><input type="checkbox" id="c-dd-en"> 网易云日推</label>
-      <label class="cfg-cb"><input type="checkbox" id="c-pl-en"> 网易云歌单同步</label></div>
-
+    <div class="cfg-row">
+      <label class="cfg-cb"><input type="checkbox" id="c-lb-en" onchange="cfgToggle('c-lb-un')"> ListenBrainz</label>
+      <input id="c-lb-un" class="input" placeholder="用户名" style="width:190px" disabled>
+    </div>
+    <div class="cfg-row">
+      <label class="cfg-cb"><input type="checkbox" id="c-lf-en" onchange="cfgToggle('c-lf-k');cfgToggle('c-lf-u')"> Last.fm</label>
+      <input id="c-lf-k" class="input" placeholder="API Key" style="width:180px" disabled>
+      <input id="c-lf-u" class="input" placeholder="用户名" style="width:150px" disabled>
+    </div>
+    <div class="cfg-row">
+      <label class="cfg-cb"><input type="checkbox" id="c-dd-en"> 网易云日推</label>
+      <label class="cfg-cb"><input type="checkbox" id="c-pl-en"> 网易云歌单同步</label>
+    </div>
     <div class="cfg-sep">下载</div>
     <div class="cfg-row" style="flex-wrap:wrap" id="c-dl-srcs"></div>
-    <div class="cfg-row"><div class="cfg-group"><label>匹配阈值</label><input id="c-th" class="input" style="width:80px" type="number"></div>
-      <div class="cfg-group"><label>时长差(秒)</label><input id="c-dur" class="input" style="width:80px" type="number"></div>
-      <div class="cfg-group"><label>下载间隔(秒)</label><input id="c-int" class="input" style="width:80px" type="number"></div></div>
-
+    <div class="cfg-row">
+      <div class="cfg-group"><label>匹配阈值</label><input id="c-th" class="input" style="width:90px" type="number"></div>
+      <div class="cfg-group"><label>时长差(秒)</label><input id="c-dur" class="input" style="width:90px" type="number"></div>
+      <div class="cfg-group"><label>下载间隔(秒)</label><input id="c-int" class="input" style="width:90px" type="number"></div>
+    </div>
     <div class="cfg-sep">调度</div>
-    <div class="cfg-row"><div class="cfg-group"><label>Cron</label><input id="c-cron" class="input" style="width:300px" placeholder="30 4 * * *"></div></div>
-
-    <details style="margin-top:14px"><summary style="cursor:pointer;font-size:13px;color:var(--muted)">高级 → 完整 YAML</summary>
-      <textarea id="c-yaml" class="input" style="font-family:monospace;height:200px;margin-top:8px"></textarea>
+    <div class="cfg-group"><label>Cron 表达式</label><input id="c-cron" class="input" placeholder="30 4 * * *"></div>
+    <details class="adv"><summary>高级 → 完整 YAML</summary>
+      <textarea id="c-yaml" class="input mono"></textarea>
     </details>
-
-    <div class="bar" style="margin-top:14px"><button onclick="saveConfig()">保存</button><button class="secondary" onclick="hideModal()">取消</button><span id="cfg-st"></span></div>
-  </div>`;
+    <div class="bar">
+      <button class="btn" onclick="saveConfig()">保存</button>
+      <button class="btn ghost" onclick="hideModal()">取消</button>
+      <span id="cfg-st"></span>
+    </div>`;
   showModal(html);
   document.getElementById('cfg-st').textContent = '加载中…';
   fetch('/api/config').then(r=>r.text()).then(t => {
@@ -365,7 +551,7 @@ function showConfig() {
     const srcs = ['ytdlp','netease','kuwo','migu','bodian','qq'];
     const act = (y.download?.sources || []);
     document.getElementById('c-dl-srcs').innerHTML = srcs.map(s =>
-      `<label class="cfg-cb" style="margin-right:8px"><input type="checkbox" value="${s}" ${act.includes(s)?'checked':''}> ${s}</label>`
+      `<label class="cfg-cb"><input type="checkbox" value="${s}" ${act.includes(s)?'checked':''}> ${s}</label>`
     ).join('');
     setVal('c-th', y.download?.title_threshold); setVal('c-dur', y.download?.max_duration_diff);
     setVal('c-int', y.download?.interval_seconds); setVal('c-cron', y.schedule?.cron);
@@ -405,8 +591,8 @@ async function saveConfig() {
     schedule: {cron: v('c-cron')||'30 4 * * *'},
   };
   const r = await (await fetch('/api/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})).json();
-  g('cfg-st').innerHTML = r.ok ? '<span class="ok">✓ 已保存</span>' : '<span class="bad">✗ '+r.msg+'</span>';
-  if (r.ok) setTimeout(hideModal, 1200);
+  if (r.ok) { toast('✓ 配置已保存并热生效', 'ok'); hideModal(); load(); }
+  else toast('✗ 保存失败: '+(r.msg||''), 'bad');
 }
 function hideModal() { const m = document.querySelector('.modal'); if(m) m.remove(); }
 function showModal(html) {
@@ -414,34 +600,7 @@ function showModal(html) {
   m.addEventListener('click', e => { if(e.target===m) m.remove(); });
   document.body.appendChild(m);
 }
-const CHARTS = [
-  {id:0, name:'热歌榜'}, {id:1, name:'新歌榜'}, {id:2, name:'原创榜'},
-  {id:3, name:'飙升榜'}, {id:4, name:'电音榜'}, {id:5, name:'抖音榜'},
-];
-function switchSearchTab(tab) {
-  document.getElementById('stab-search-content').classList.toggle('hide', tab !== 'search');
-  document.getElementById('stab-rank-content').classList.toggle('hide', tab !== 'rank');
-  document.getElementById('stab-search').classList.toggle('active', tab === 'search');
-  document.getElementById('stab-rank').classList.toggle('active', tab === 'rank');
-  if (tab === 'rank' && !document.getElementById('chart-btns').children.length) {
-    document.getElementById('chart-btns').innerHTML = CHARTS.map(c =>
-      `<button class="small" onclick="loadChart(${c.id},'${c.name}')" style="background:var(--card)">${c.name}</button>`
-    ).join('');
-  }
-}
-async function loadChart(typeId, typeName) {
-  const status = document.getElementById('search-status');
-  status.textContent = '加载 '+typeName+'…';
-  const r = await (await fetch('/api/chart?type='+typeId)).json();
-  document.getElementById('search-results').innerHTML =
-    '<tr><th>曲名</th><th>歌手</th><th>专辑</th><th></th></tr>' +
-    r.map(s => {
-      const a = encodeURIComponent(s.artists[0]||''), t = encodeURIComponent(s.name);
-      return `<tr><td>${s.name}</td><td class="muted">${s.artists.join('/')}</td><td class="muted">${s.album||'-'}</td>
-        <td><button class="small" onclick="dlSong('${a}','${t}')">下载</button></td></tr>`;
-    }).join('');
-  status.innerHTML = typeName+' — '+r.length+' 首';
-}
+
 load();
 setInterval(load, 30000);
 </script>
@@ -627,16 +786,6 @@ def create_app(cfg, db, jobs, scheduler=None):
             return {"error": "网易云后端未连接"}
         try:
             return ncm.search(q, limit)
-        except Exception as e:
-            return {"error": str(e)}
-
-    @app.get("/api/chart")
-    def chart(type: int = 0):
-        ncm = getattr(app.state, "ncm_client", None)
-        if not ncm:
-            return {"error": "网易云后端未连接"}
-        try:
-            return ncm.top_song(type, limit=100)
         except Exception as e:
             return {"error": str(e)}
 
