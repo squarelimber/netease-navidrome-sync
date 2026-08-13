@@ -1,6 +1,7 @@
 services:
   ncm-api:
-    image: moefurina/ncm-api:latest
+    # 锁定版本避免 latest 漂移导致行为突变；升级时手动改 tag
+    image: moefurina/ncm-api:4.39.0
     container_name: ncm-api
     environment:
       - ENABLE_GENERAL_UNBLOCK=true

@@ -6,10 +6,10 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import re
 import shutil
-import tempfile
 import time
 from pathlib import Path
 
@@ -44,11 +44,20 @@ _MUSICDL_NETEASE_QUALITIES = ["exhigh", "standard"]
 
 def _patch_musicdl():
     """对 musicdl 做运行时校准（模块级补丁）。"""
-    try:
-        import musicdl.modules.sources.netease as _nc
-        _nc.MUSIC_QUALITIES = list(_MUSICDL_NETEASE_QUALITIES)
-    except Exception as e:
-        log.debug("patch musicdl netease qualities 失败: %s", e)
+    candidates = [
+        "musicdl.modules.sources.netease",
+        "musicdl.sources.netease",
+        "musicdl.modules.netease",
+    ]
+    for name in candidates:
+        try:
+            mod = importlib.import_module(name)
+        except ImportError:
+            continue
+        if hasattr(mod, "MUSIC_QUALITIES"):
+            mod.MUSIC_QUALITIES = list(_MUSICDL_NETEASE_QUALITIES)
+            return
+    log.warning("无法定位 musicdl 网易云模块以限制音质（不影响下载，仅可能下载大体积母带文件）")
 
 
 class DownloadError(Exception):
@@ -68,6 +77,42 @@ class MusicDLEngine:
         self.max_duration_diff = max_duration_diff
         self.limiter = RateLimiter(interval)
         self._clients = {}
+
+    def update_config(self, sources: list[str] | None = None, title_threshold: int | None = None,
+                      max_duration_diff: int | None = None, interval: float | None = None):
+        """热更新下载参数，并重置已缓存的客户端（下次下载时按新配置重建）。"""
+        if sources is not None:
+            self.sources = [s for s in sources if s in SOURCE_CLIENTS]
+        if title_threshold is not None:
+            self.title_threshold = title_threshold
+        if max_duration_diff is not None:
+            self.max_duration_diff = max_duration_diff
+        if interval is not None:
+            self.limiter = RateLimiter(interval)
+        if self._clients:
+            log.info("下载参数已热更新，重置 %d 个已缓存的 musicdl 客户端", len(self._clients))
+            self._clients.clear()
+
+    def set_netease_cookie(self, cookie: str):
+        """热更新网易云 Cookie（扫码登录后调用），旧的网易云客户端作废重建。"""
+        self.netease_cookie = cookie
+        self._clients.pop("netease", None)
+
+    def cleanup(self, max_age_s: float = 86400):
+        """清理 work_dir 中超过 max_age_s 的残留文件，防止磁盘无限增长。"""
+        now = time.time()
+        removed = 0
+        for child in self.work_dir.rglob("*"):
+            if not child.is_file():
+                continue
+            try:
+                if now - child.stat().st_mtime > max_age_s:
+                    child.unlink()
+                    removed += 1
+            except OSError:
+                pass
+        if removed:
+            log.info("清理 musicdl 临时残留 %d 个文件", removed)
 
     def _get_client(self, source: str):
         if source in self._clients:
@@ -260,8 +305,3 @@ def move_file(src: Path, dst: Path) -> Path:
 
 def cleanup_dir(path: Path):
     shutil.rmtree(path, ignore_errors=True)
-
-
-def temp_download_root(base: Path) -> Path:
-    d = Path(tempfile.mkdtemp(prefix="dl_", dir=str(base)))
-    return d

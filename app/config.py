@@ -40,44 +40,17 @@ class Config:
     sources: dict  # name -> SourceCfg
     discover_daily_limit: int
     dl_sources: list
-    dl_quality: str
     dl_interval: float
-    dl_sources_timeout: int
     title_threshold: int
     max_duration_diff: int
     cron: str
     run_on_startup: bool
     web_host: str
     web_port: int
+    web_auth_user: str
+    web_auth_password: str
     _path: Path = field(default_factory=Path)
     _raw: dict = field(default_factory=dict)
-
-    def save(self):
-        """将当前配置写回 YAML 文件。"""
-        raw = self._raw.copy()
-        raw["music_dir"] = str(self.music_dir)
-        raw["data_dir"] = str(self.data_dir)
-        raw["ncm_api_url"] = self.ncm_api_url
-        raw["navidrome"] = {"url": self.navidrome.url, "username": self.navidrome.username, "password": self.navidrome.password}
-        raw["sources"] = {}
-        for name, sc in self.sources.items():
-            d = {"enabled": sc.enabled}
-            d.update(sc.extra)
-            raw["sources"][name] = d
-        raw["discover_daily_limit"] = self.discover_daily_limit
-        raw.setdefault("download", {})
-        raw["download"]["sources"] = self.dl_sources
-        raw["download"]["interval_seconds"] = self.dl_interval
-        raw["download"]["title_threshold"] = self.title_threshold
-        raw["download"]["max_duration_diff"] = self.max_duration_diff
-        raw.setdefault("schedule", {})
-        raw["schedule"]["cron"] = self.cron
-        raw["schedule"]["run_on_startup"] = self.run_on_startup
-        raw.setdefault("web", {})
-        raw["web"]["host"] = self.web_host
-        raw["web"]["port"] = self.web_port
-        with open(self._path, "w", encoding="utf-8") as f:
-            yaml.dump(raw, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 def _find_config_file() -> Path:
@@ -136,13 +109,13 @@ def load() -> Config:
         sources=sources,
         discover_daily_limit=int(raw.get("discover_daily_limit", 40)),
         dl_sources=list(dl.get("sources", ["netease", "kuwo", "migu", "bodian", "qq"])),
-        dl_quality=str(dl.get("quality", "lossless")),
         dl_interval=float(dl.get("interval_seconds", 2.0)),
-        dl_sources_timeout=int(dl.get("timeout", 120)),
         title_threshold=int(dl.get("title_threshold", 85)),
         max_duration_diff=int(dl.get("max_duration_diff", 12)),
         cron=str(sch.get("cron", "30 4 * * *")),
         run_on_startup=bool(sch.get("run_on_startup", False)),
         web_host=str(web.get("host", "0.0.0.0")),
         web_port=int(web.get("port", 8678)),
+        web_auth_user=str(os.environ.get("SYNC_AUTH_USER") or web.get("auth_user", "")),
+        web_auth_password=str(os.environ.get("SYNC_AUTH_PASSWORD") or web.get("auth_password", "")),
     )

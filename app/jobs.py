@@ -11,8 +11,8 @@ from pathlib import Path
 
 from . import matcher
 from .db import DB, SCROBBLE_TS_KEY
-from .downloader import (DownloadError, MusicDLEngine, embed_metadata,
-                         move_file, sniff_duration_ms)
+from .downloader import (DownloadError, MusicDLEngine, cleanup_dir,
+                         embed_metadata, move_file, sniff_duration_ms)
 from .library import SubsonicClient, display_name, write_lrc_sidecar, write_m3u8
 from .api_client import NCMAPIClient
 from .sources.base import Track
@@ -65,6 +65,7 @@ class Jobs:
         if clean:
             cookie = clean
         self.ncm.set_cookie(cookie)
+        self.engine.set_netease_cookie(cookie)
         try:
             (self.cfg.data_dir / "cookie.txt").write_text(cookie, encoding="utf-8")
         except Exception as e:
@@ -74,6 +75,34 @@ class Jobs:
         except Exception as e:
             log.warning("Cookie 验证失败: %s", e)
             self.last_cookie_ok = False
+
+    def apply_engine_config(self):
+        """配置编辑器保存后热更新下载引擎参数。"""
+        self.engine.update_config(
+            sources=self.cfg.dl_sources,
+            title_threshold=self.cfg.title_threshold,
+            max_duration_diff=self.cfg.max_duration_diff,
+            interval=self.cfg.dl_interval,
+        )
+
+    def reload_navidrome(self):
+        """配置编辑器保存后重建 Subsonic 查重客户端。"""
+        self.subsonic = (
+            SubsonicClient(self.cfg.navidrome.url, self.cfg.navidrome.username,
+                           self.cfg.navidrome.password)
+            if self.cfg.navidrome.enabled else None
+        )
+
+    def _cleanup_tmp(self):
+        """清理临时目录残留，防止磁盘无限增长。"""
+        try:
+            cleanup_dir(self.cfg.data_dir / "tmp_one")
+        except Exception as e:
+            log.debug("清理 tmp_one 失败: %s", e)
+        try:
+            self.engine.cleanup()
+        except Exception as e:
+            log.debug("清理 musicdl work_dir 失败: %s", e)
 
     # ---------- 推荐源 ----------
 
@@ -163,15 +192,12 @@ class Jobs:
 
         # 下载：走 musicdl 多源链
         audio_path, dl_source = None, ""
-        tmp_dir = self.cfg.data_dir / "tmp_one"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        if audio_path is None:
-            try:
-                audio_path, dl_source = self.engine.download(track)
-            except DownloadError as e:
-                log.warning("下载失败 %s - %s: %s", "/".join(track.artists), track.title, e)
-            except Exception as e:
-                log.exception("下载异常: %s", e)
+        try:
+            audio_path, dl_source = self.engine.download(track)
+        except DownloadError as e:
+            log.warning("下载失败 %s - %s: %s", "/".join(track.artists), track.title, e)
+        except Exception as e:
+            log.exception("下载异常: %s", e)
 
         if audio_path is None:
             self.db.mark_failed(key, "download_failed" if track.ncm_id else "match_failed")
@@ -396,6 +422,7 @@ class Jobs:
         finally:
             self.db.run_finish(run_id, stats)
             self._lock.release()
+            self._cleanup_tmp()
 
 
 def _merge_lrc(olrc: str | None, tlrc: str | None) -> str | None:

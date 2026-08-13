@@ -32,12 +32,25 @@ class NCMAPIClient:
     def _get(self, path: str, **params) -> dict:
         if self._cookie:
             params["cookie"] = self._cookie
+        url = f"{self.base_url}{path}"
         try:
-            r = self.session.get(f"{self.base_url}{path}", params=params, timeout=TIMEOUT)
+            r = self.session.get(url, params=params, timeout=TIMEOUT)
             r.raise_for_status()
             return r.json()
-        except Exception as e:
-            log.warning("api-enhanced 请求失败 %s: %s", path, e)
+        except requests.exceptions.RequestException as e:
+            status = getattr(getattr(e, "response", None), "status_code", "?")
+            snippet = ""
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                try:
+                    snippet = (resp.text or "")[:200]
+                except Exception:
+                    pass
+            log.warning("api-enhanced 请求失败 %s (HTTP %s): %s | %s",
+                        path, status, e, snippet)
+            return {"code": -1, "msg": str(e)}
+        except ValueError as e:
+            log.warning("api-enhanced 响应不是合法 JSON %s: %s", path, e)
             return {"code": -1, "msg": str(e)}
 
     # ------- 登录 -------
@@ -96,10 +109,15 @@ class NCMAPIClient:
     # ------- 歌曲信息 -------
 
     def song_detail(self, song_ids: list) -> list:
-        j = self._get("/song/detail", ids=",".join(str(i) for i in song_ids))
-        if j.get("code") != 200:
-            return []
-        return [self._norm_song(s) for s in (j.get("songs") or [])]
+        """按批查询歌曲详情（每批 200 个，避免 URL 过长）。"""
+        out = []
+        for i in range(0, len(song_ids), 200):
+            chunk = song_ids[i:i + 200]
+            j = self._get("/song/detail", ids=",".join(str(x) for x in chunk))
+            if j.get("code") != 200:
+                continue
+            out.extend(self._norm_song(s) for s in (j.get("songs") or []))
+        return out
 
     def lyric(self, song_id: int) -> tuple[str | None, str | None]:
         """返回 (原文, 翻译)。"""
@@ -123,6 +141,13 @@ class NCMAPIClient:
             "creator": (pl.get("creator") or {}).get("nickname", ""),
             "track_ids": [t["id"] for t in (pl.get("trackIds") or [])],
         }
+
+    def playlist_track_all(self, playlist_id: int, limit: int = 1000, offset: int = 0) -> list:
+        """分页拉取歌单全部曲目（/playlist/track/all，支持大歌单翻页）。"""
+        j = self._get("/playlist/track/all", id=playlist_id, limit=limit, offset=offset)
+        if j.get("code") != 200:
+            return []
+        return [self._norm_song(s) for s in (j.get("songs") or [])]
 
     # ------- 日推 -------
 

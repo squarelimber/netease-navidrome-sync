@@ -89,6 +89,7 @@ docker compose up -d --build
 | `discover_daily_limit` | 每日新增推荐曲上限 |
 | `schedule.cron` | 每日任务时间，默认 `30 4 * * *` |
 | `web.port` | 状态页端口，默认 8678 |
+| `web.auth_user/auth_password` | 可选：状态页 Basic Auth（留空则不启用） |
 
 ### 获取网易云 Cookie（备选）
 

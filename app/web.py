@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 import logging
 import threading
@@ -394,7 +396,7 @@ async function saveConfig() {
     navidrome: {url: v('c-nav-url'), username: v('c-nav-user'), password: v('c-nav-pass')},
     sources: {
       netease_daily: {enabled: c('c-dd-en')},
-      netease_playlists: {enabled: c('c-pl-en'), playlists: []},
+      netease_playlists: {enabled: c('c-pl-en')},
       listenbrainz: {enabled: c('c-lb-en'), username: v('c-lb-un')},
       lastfm: {enabled: c('c-lf-en'), api_key: v('c-lf-k'), username: v('c-lf-u')}
     },
@@ -460,6 +462,27 @@ def _live_cookie_ok(jobs) -> bool | None:
 
 def create_app(cfg, db, jobs, scheduler=None):
     app = FastAPI(title="navidrome-sync")
+
+    @app.middleware("http")
+    async def basic_auth(request: Request, call_next):
+        """可选 Basic Auth：配置了 web.auth_user 时才启用，未配置保持开放。"""
+        if not cfg.web_auth_user:
+            return await call_next(request)
+        header = request.headers.get("authorization", "")
+        ok = False
+        if header.startswith("Basic "):
+            try:
+                raw = base64.b64decode(header[6:]).decode("utf-8")
+                user, _, pwd = raw.partition(":")
+                ok = (hmac.compare_digest(user, cfg.web_auth_user)
+                      and hmac.compare_digest(pwd, cfg.web_auth_password))
+            except Exception:
+                ok = False
+        if not ok:
+            return JSONResponse({"detail": "需要登录"},
+                                status_code=401,
+                                headers={"WWW-Authenticate": 'Basic realm="navidrome-sync"'})
+        return await call_next(request)
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -549,6 +572,9 @@ def create_app(cfg, db, jobs, scheduler=None):
                 for k, v in u.items():
                     if isinstance(v, dict) and isinstance(d.get(k), dict):
                         merge(d[k], v)
+                    elif isinstance(v, list) and not v and isinstance(d.get(k), list):
+                        # 空列表不覆盖已有配置，防止表单把歌单等列表清空
+                        continue
                     else:
                         d[k] = v
             merge(raw, updates)
@@ -556,15 +582,17 @@ def create_app(cfg, db, jobs, scheduler=None):
             from . import config as config_mod
             new_cfg = config_mod.load()
             for at in ("music_dir","data_dir","ncm_api_url","cron","discover_daily_limit",
-                       "dl_sources","dl_interval","dl_quality","dl_sources_timeout",
+                       "dl_sources","dl_interval",
                        "title_threshold","max_duration_diff","run_on_startup",
-                       "web_host","web_port"):
+                       "web_host","web_port","web_auth_user","web_auth_password"):
                 setattr(cfg, at, getattr(new_cfg, at))
             cfg.navidrome = new_cfg.navidrome
             cfg.sources = new_cfg.sources
             if cfg.netease_cookie != new_cfg.netease_cookie:
                 cfg.netease_cookie = new_cfg.netease_cookie
                 jobs.set_cookie(cfg.netease_cookie)
+            jobs.apply_engine_config()
+            jobs.reload_navidrome()
             if scheduler:
                 try:
                     parts = cfg.cron.split()

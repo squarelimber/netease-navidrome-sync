@@ -69,3 +69,6 @@ schedule:
 web:
   host: 0.0.0.0
   port: 8678
+  # 可选：状态页 Basic Auth（留空则不启用，注意局域网内任何人可访问）
+  auth_user: ""
+  auth_password: ""
