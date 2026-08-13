@@ -67,9 +67,9 @@ def test_download_ytdlp_flow(tmp_path, monkeypatch):
                 {"id": "VIDEO1", "title": "周杰伦 - 晴天 (Official)", "duration": 260},
             ]}
             return _FakeProc(0, json.dumps(payload), "")
-        if "-x" in args:
+        if "-f" in args:
             vid = [a.split("=")[1] for a in args if a.startswith("https://")][0]
-            out = tmp_path / "work" / "ytdlp" / f"{vid}.mp3"
+            out = tmp_path / "work" / "ytdlp" / f"{vid}.m4a"
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(b"z" * 200 * 1024)
             return _FakeProc(0, "", "")
@@ -77,7 +77,7 @@ def test_download_ytdlp_flow(tmp_path, monkeypatch):
 
     monkeypatch.setattr(MusicDLEngine, "_run_ytdlp", staticmethod(fake_run))
     path = e._download_ytdlp(_track())
-    assert path is not None and path.name == "VIDEO1.mp3"
+    assert path is not None and path.name == "VIDEO1.m4a"
 
 
 def test_download_ytdlp_search_failed(tmp_path, monkeypatch):

@@ -5,13 +5,17 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# ffmpeg：yt-dlp 兜底源提取/转码音频必需
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+# 国内网络可指定镜像加速 pip，例如：
+#   docker build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple .
+ARG PIP_INDEX_URL=""
+ENV PIP_INDEX_URL=$PIP_INDEX_URL
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN if [ -n "$PIP_INDEX_URL" ]; then \
+        pip install --no-cache-dir -r requirements.txt -i "$PIP_INDEX_URL"; \
+    else \
+        pip install --no-cache-dir -r requirements.txt; \
+    fi
 
 COPY app ./app
 

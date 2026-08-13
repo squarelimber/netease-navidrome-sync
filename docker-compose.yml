@@ -11,7 +11,11 @@ services:
     restart: unless-stopped
 
   navidrome-sync:
-    build: .
+    build:
+      context: .
+      args:
+        # 国内网络 pip 下载慢时，取消注释换镜像源（构建更快）
+        # PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
     container_name: navidrome-sync
     depends_on:
       - ncm-api

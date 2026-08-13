@@ -63,6 +63,10 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
 
 > 后续更新只需 `git pull && docker compose restart navidrome-sync`，.py 文件已热挂载，无需 rebuild。
 
+> **国内网络加速构建**：如果 pip 下载慢，可加 `--build-arg` 指定镜像源：
+> `docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple navidrome-sync`
+> （本镜像不依赖 apt/ffmpeg，构建只包含 pip 安装，速度瓶颈仅在 pip 下载）
+
 ### 方式 B：用 git 克隆
 
 ```bash
@@ -85,7 +89,7 @@ docker compose up -d --build
 | `sources.netease_playlists.playlists` | 要同步的歌单列表 |
 | `sources.listenbrainz.username` | ListenBrainz 用户名 |
 | `sources.lastfm` | Last.fm API Key + 用户名 |
-| `download.sources` | 下载源链顺序，默认 `ytdlp` 优先（YouTube 兼容性最好），musicdl 各源作后备（镜像已内置 FFmpeg） |
+| `download.sources` | 下载源链顺序，默认 `ytdlp` 优先（YouTube 兼容性最好，直取 m4a 无需 ffmpeg），musicdl 各源作后备 |
 | `discover_daily_limit` | 每日新增推荐曲上限 |
 | `schedule.cron` | 每日任务时间，默认 `30 4 * * *` |
 | `web.port` | 状态页端口，默认 8678 |

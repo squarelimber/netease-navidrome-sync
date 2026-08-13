@@ -295,9 +295,9 @@ class MusicDLEngine:
             return None
         vid = hit["id"]
         try:
+            # 直取 m4a 音频（无需 ffmpeg 转码），m4a 标签/时长校验/Navidrome 均原生支持
             proc = self._run_ytdlp([
-                "-f", "bestaudio/best",
-                "-x", "--audio-format", "mp3", "--audio-quality", "0",
+                "-f", "bestaudio[ext=m4a]/bestaudio[ext=mp4]",
                 "--no-playlist",
                 "-o", str(work / "%(id)s.%(ext)s"),
                 "--", f"https://www.youtube.com/watch?v={vid}",

@@ -50,7 +50,7 @@ discover_daily_limit: 40
 download:
   # musicdl 下载源优先级链（按顺序尝试）。可选:
   #   ytdlp / netease / kuwo / migu / bodian / qq / kugou / qianqian
-  # ytdlp 为 YouTube 兜底源（需 ffmpeg，音质约 128-256k）：
+  # ytdlp 为 YouTube 兜底源（直取 m4a 音频，无需 ffmpeg，音质约 128-256k）：
   #   兼容性好（繁简/日语歌名均可），默认放首位，musicdl 各源作后备
   sources: [ytdlp, netease, kuwo, migu, bodian, qq]
   # 两次下载之间的间隔秒数，避免触发风控
