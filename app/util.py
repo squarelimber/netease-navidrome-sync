@@ -1,6 +1,7 @@
 """通用工具：文件名清洗、文本归一化、限速器、日志。"""
 
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import re
 import sys
 import time
@@ -22,7 +23,11 @@ def setup_logging(log_file=None):
         return
     handlers = [logging.StreamHandler(sys.stdout)]
     if log_file:
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+        # 按本地时间每天午夜滚动，保留最近 14 个历史日志文件。
+        handlers.append(TimedRotatingFileHandler(
+            log_file, when="midnight", interval=1, backupCount=14,
+            encoding="utf-8", delay=True,
+        ))
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
