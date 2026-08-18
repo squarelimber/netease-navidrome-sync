@@ -46,3 +46,9 @@ def test_check_cookie_not_logged_in():
 def test_check_cookie_empty_cookie():
     c = NCMAPIClient("http://mock")
     assert c.check_cookie() is False
+
+
+def test_check_cookie_state_distinguishes_network_error():
+    c = _client_with({"code": -1, "_request_error": True})
+    assert c.check_cookie_state() is None
+    assert c.check_cookie() is False

@@ -37,6 +37,7 @@ class Config:
     navidrome: NavidromeCfg
     ncm_api_url: str
     netease_cookie: str
+    cookie_file: Path
     sources: dict  # name -> SourceCfg
     discover_daily_limit: int
     dl_sources: list
@@ -106,6 +107,7 @@ def load() -> Config:
         navidrome=navidrome,
         ncm_api_url=str(raw.get("ncm_api_url", "http://ncm-api:3000")),
         netease_cookie=cookie,
+        cookie_file=cookie_file,
         sources=sources,
         discover_daily_limit=int(raw.get("discover_daily_limit", 40)),
         dl_sources=list(dl.get("sources", ["ytdlp", "netease", "kuwo", "migu", "bodian", "qq"])),

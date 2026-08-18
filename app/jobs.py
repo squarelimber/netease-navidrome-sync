@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from . import matcher
-from .db import DB, SCROBBLE_TS_KEY
+from .db import DB, SCROBBLE_PENDING_KEY, SCROBBLE_TS_KEY
 from .downloader import (DownloadError, MusicDLEngine, cleanup_dir,
                          embed_metadata, move_file, sniff_duration_ms)
 from .library import SubsonicClient, display_name, write_lrc_sidecar, write_m3u8
@@ -32,6 +32,8 @@ class Jobs:
         self.cfg = cfg
         self.db = db
         self.ncm = NCMAPIClient(cfg.ncm_api_url)
+        self.last_cookie_ok: bool | None = None
+        self.last_cookie_check_at = 0.0
         self.engine = MusicDLEngine(
             cfg.dl_sources, cfg.data_dir / "tmp_dl",
             netease_cookie=cfg.netease_cookie,
@@ -48,7 +50,6 @@ class Jobs:
         )
         self.ncm_limiter = RateLimiter(0.5)
         self._lock = threading.Lock()
-        self.last_cookie_ok: bool | None = None
         self._abort = threading.Event()
         self.aborted = False
 
@@ -68,14 +69,21 @@ class Jobs:
         self.ncm.set_cookie(cookie)
         self.engine.set_netease_cookie(cookie)
         try:
-            (self.cfg.data_dir / "cookie.txt").write_text(cookie, encoding="utf-8")
+            self.cfg.cookie_file.parent.mkdir(parents=True, exist_ok=True)
+            self.cfg.cookie_file.write_text(cookie, encoding="utf-8")
         except Exception as e:
             log.warning("写入 cookie 文件失败: %s", e)
         try:
-            self.last_cookie_ok = self.ncm.check_cookie()
+            self.refresh_cookie_status()
         except Exception as e:
             log.warning("Cookie 验证失败: %s", e)
             self.last_cookie_ok = False
+
+    def refresh_cookie_status(self) -> bool | None:
+        """校验 Cookie，并区分明确失效与暂时无法连接 API。"""
+        self.last_cookie_ok = self.ncm.check_cookie_state()
+        self.last_cookie_check_at = time.time()
+        return self.last_cookie_ok
 
     def apply_engine_config(self):
         """配置编辑器保存后热更新下载引擎参数。"""
@@ -262,18 +270,32 @@ class Jobs:
         username = sc.extra.get("username", "")
         if not username:
             return {"ok": False, "msg": "未配置 ListenBrainz 用户名"}
-        if not self.last_cookie_ok:
+        if self.last_cookie_ok is False:
             return {"ok": False, "msg": "网易云 Cookie 无效"}
+        if self.last_cookie_ok is not True:
+            return {"ok": False, "msg": "网易云 API 暂时不可用，无法校验 Cookie"}
 
         last_ts = float(self.db.get_property(SCROBBLE_TS_KEY, "0"))
-        listens = get_recent_listens(username, min_ts=last_ts)
+        try:
+            pending = set(json.loads(self.db.get_property(SCROBBLE_PENDING_KEY, "[]")))
+        except (TypeError, ValueError):
+            pending = set()
+        pending_times = []
+        for item in pending:
+            try:
+                pending_times.append(float(item.split("|", 1)[0]))
+            except (ValueError, IndexError):
+                continue
+        fetch_ts = min([last_ts, *(t - 1 for t in pending_times)]) if pending_times else last_ts
+        listens = get_recent_listens(username, min_ts=fetch_ts)
 
         if not listens:
             return {"ok": True, "count": 0, "msg": f"无新记录（上次: {int(last_ts)}）"}
 
         success, fail, max_ts = 0, 0, last_ts
         for l in listens:
-            if l["listened_at"] <= last_ts:
+            listen_key = f"{l['listened_at']}|{l['artist']}|{l['title']}"
+            if l["listened_at"] <= last_ts and listen_key not in pending:
                 continue
             try:
                 self.ncm_limiter.wait()
@@ -289,6 +311,7 @@ class Jobs:
                                              self.cfg.title_threshold - 5, self.cfg.max_duration_diff + 5)
                 if not hit:
                     fail += 1
+                    pending.add(listen_key)
                     continue
                 time_ms = l.get("duration_ms", 180000) or 180000
                 if self.ncm.scrobble(hit["id"], time_ms):
@@ -297,12 +320,17 @@ class Jobs:
                         max_ts = l["listened_at"]
                 else:
                     fail += 1
+                    pending.add(listen_key)
+                    continue
+                pending.discard(listen_key)
             except Exception as e:
                 log.debug("听歌打卡失败 %s - %s: %s", l["artist"], l["title"], e)
                 fail += 1
+                pending.add(listen_key)
 
         if max_ts > last_ts:
             self.db.set_property(SCROBBLE_TS_KEY, str(max_ts))
+        self.db.set_property(SCROBBLE_PENDING_KEY, json.dumps(sorted(pending), ensure_ascii=False))
         log.info("听歌回传: %d 成功, %d 失败（跳过 %d 首）", success, fail, len(listens) - success - fail)
         return {"ok": True, "count": success, "fail": fail, "total": len(listens)}
 
@@ -320,10 +348,12 @@ class Jobs:
             log.info("========== 每日同步开始 ==========")
             self._abort.clear()
             self.aborted = False
-            self.last_cookie_ok = self.ncm.check_cookie()
+            self.refresh_cookie_status()
             stats["cookie_ok"] = self.last_cookie_ok
-            if not self.last_cookie_ok:
+            if self.last_cookie_ok is False:
                 log.warning("网易云 Cookie 无效或未配置：日推/完整歌单不可用，搜索与免费音源仍可用")
+            elif self.last_cookie_ok is None:
+                log.warning("无法连接网易云 API，暂不判断 Cookie 状态")
 
             affected_playlists = set()
 
@@ -348,9 +378,10 @@ class Jobs:
             # 2. 拉取各推荐源
             all_tracks: list[Track] = []
             for source in self._build_sources():
-                if source.name.startswith("netease") and not self.last_cookie_ok:
-                    log.warning("跳过源 %s（Cookie 无效）", source.name)
-                    stats["sources"][source.name] = "skipped(cookie)"
+                if source.name.startswith("netease") and self.last_cookie_ok is not True:
+                    reason = "cookie" if self.last_cookie_ok is False else "api_unavailable"
+                    log.warning("跳过源 %s（%s）", source.name, reason)
+                    stats["sources"][source.name] = f"skipped({reason})"
                     continue
                 try:
                     tracks = source.fetch()

@@ -46,9 +46,11 @@ class NCMAPIClient:
                     snippet = (resp.text or "")[:200]
                 except Exception:
                     pass
+            # 不要记录 requests 异常对象本身：其字符串通常包含完整 URL 和 Cookie。
             log.warning("api-enhanced 请求失败 %s (HTTP %s): %s | %s",
-                        path, status, e, snippet)
-            return {"code": -1, "msg": str(e)}
+                        path, status, type(e).__name__, snippet)
+            return {"code": -1, "msg": str(e), "_request_error": True,
+                    "_http_status": status}
         except ValueError as e:
             log.warning("api-enhanced 响应不是合法 JSON %s: %s", path, e)
             return {"code": -1, "msg": str(e)}
@@ -154,14 +156,21 @@ class NCMAPIClient:
     # ------- 账号 -------
 
     def check_cookie(self) -> bool:
+        """检查 Cookie 是否有效；网络不可用时仍返回 False 以兼容旧调用方。"""
+        return self.check_cookie_state() is True
+
+    def check_cookie_state(self) -> bool | None:
+        """返回 True=有效、False=明确失效、None=无法判断（网络/API 不可用）。"""
         if not self._cookie:
             return False
         j = self._get("/login/status")
+        if j.get("_request_error"):
+            return None
         data = j.get("data") or {}
         # api-enhanced 返回 {data: {code: 200, account, profile}}（顶层无 code），
         # 其他 fork 可能是顶层 code，两种都兼容
         ok = j.get("code") == 200 or data.get("code") == 200
-        return ok and bool(data.get("account") or data.get("profile"))
+        return bool(ok and (data.get("account") or data.get("profile")))
 
     # ------- 听歌打卡 -------
 

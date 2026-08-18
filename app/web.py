@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import threading
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -610,10 +611,11 @@ setInterval(load, 30000);
 
 
 def _live_cookie_ok(jobs) -> bool | None:
-    """实时校验 Cookie 状态（缓存为 None 或可疑时重新验证）。"""
-    if not jobs.last_cookie_ok:
+    """定期校验 Cookie；网络不可用时返回 None，而不是误报失效。"""
+    if (time.time() - getattr(jobs, "last_cookie_check_at", 0.0) > 300
+            or jobs.last_cookie_ok is None):
         try:
-            jobs.last_cookie_ok = jobs.ncm.check_cookie()
+            jobs.refresh_cookie_status()
         except Exception:
             pass
     return jobs.last_cookie_ok

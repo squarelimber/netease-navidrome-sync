@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS property (
 """
 
 SCROBBLE_TS_KEY = "last_scrobble_ts"
+SCROBBLE_PENDING_KEY = "scrobble_pending"
 
 # 失败重试退避（天），按 attempts 递增
 RETRY_BACKOFF_DAYS = [1, 1, 3, 7, 14, 30, 60]
