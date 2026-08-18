@@ -32,8 +32,6 @@ class Jobs:
         self.cfg = cfg
         self.db = db
         self.ncm = NCMAPIClient(cfg.ncm_api_url)
-        if cfg.netease_cookie:
-            self.set_cookie(cfg.netease_cookie)
         self.engine = MusicDLEngine(
             cfg.dl_sources, cfg.data_dir / "tmp_dl",
             netease_cookie=cfg.netease_cookie,
@@ -41,6 +39,9 @@ class Jobs:
             max_duration_diff=cfg.max_duration_diff,
             interval=cfg.dl_interval,
         )
+        # 下载引擎必须先完成初始化，set_cookie() 会同步更新它的 Cookie。
+        if cfg.netease_cookie:
+            self.set_cookie(cfg.netease_cookie)
         self.subsonic = (
             SubsonicClient(cfg.navidrome.url, cfg.navidrome.username, cfg.navidrome.password)
             if cfg.navidrome.enabled else None
@@ -290,10 +291,12 @@ class Jobs:
                     fail += 1
                     continue
                 time_ms = l.get("duration_ms", 180000) or 180000
-                self.ncm.scrobble(hit["id"], time_ms)
-                success += 1
-                if l["listened_at"] > max_ts:
-                    max_ts = l["listened_at"]
+                if self.ncm.scrobble(hit["id"], time_ms):
+                    success += 1
+                    if l["listened_at"] > max_ts:
+                        max_ts = l["listened_at"]
+                else:
+                    fail += 1
             except Exception as e:
                 log.debug("听歌打卡失败 %s - %s: %s", l["artist"], l["title"], e)
                 fail += 1
