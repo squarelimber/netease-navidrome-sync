@@ -48,6 +48,12 @@ VALID_SOURCES = set(SOURCE_CLIENTS) | {YTDLP_SOURCE}
 _YTDLP_SEARCH_COUNT = 5
 _YTDLP_TIMEOUT = 240
 
+# yt-dlp 403（YouTube IP 风控）处理：
+# 单曲 403 立即降级下一源；连续多曲 403 触发熔断，冷却期内跳过 ytdlp 源，避免整场任务反复撞风控
+_YTDLP_403_STREAK_LIMIT = 5
+_YTDLP_403_COOLDOWN = 3600
+_YTDLP_COOKIE_PROBE_URL = "https://www.youtube.com/feed/history"
+
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
 # musicdl 的网易云客户端默认从高音质向低音质遍历，可能拿到 100MB+ 的母带文件。
@@ -81,18 +87,23 @@ class MusicDLEngine:
     """musicdl 多源下载引擎。懒加载，单源失败不影响其他源。"""
 
     def __init__(self, sources: list[str], work_dir: Path, netease_cookie: str = "",
-                 title_threshold: int = 85, max_duration_diff: int = 12, interval: float = 2.0):
+                 title_threshold: int = 85, max_duration_diff: int = 12, interval: float = 2.0,
+                 ytdlp_cookies: Path | None = None):
         self.sources = [s for s in sources if s in VALID_SOURCES]
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.netease_cookie = netease_cookie
+        self.ytdlp_cookies = ytdlp_cookies
         self.title_threshold = title_threshold
         self.max_duration_diff = max_duration_diff
         self.limiter = RateLimiter(interval)
         self._clients = {}
+        self._ytdlp_403_streak = 0
+        self._ytdlp_disabled_until = 0.0
 
     def update_config(self, sources: list[str] | None = None, title_threshold: int | None = None,
-                      max_duration_diff: int | None = None, interval: float | None = None):
+                      max_duration_diff: int | None = None, interval: float | None = None,
+                      ytdlp_cookies: Path | None = None):
         """热更新下载参数，并重置已缓存的客户端（下次下载时按新配置重建）。"""
         if sources is not None:
             self.sources = [s for s in sources if s in VALID_SOURCES]
@@ -102,6 +113,8 @@ class MusicDLEngine:
             self.max_duration_diff = max_duration_diff
         if interval is not None:
             self.limiter = RateLimiter(interval)
+        if ytdlp_cookies is not None:
+            self.ytdlp_cookies = Path(ytdlp_cookies)
         if self._clients:
             log.info("下载参数已热更新，重置 %d 个已缓存的 musicdl 客户端", len(self._clients))
             self._clients.clear()
@@ -216,13 +229,85 @@ class MusicDLEngine:
 
     # ---------- yt-dlp 兜底源 ----------
 
-    @staticmethod
-    def _run_ytdlp(args: list[str], timeout: int = _YTDLP_TIMEOUT) -> subprocess.CompletedProcess:
-        """以模块方式调用 yt-dlp（不依赖 PATH 上的可执行文件）。"""
+    def _note_ytdlp_403(self):
+        """记录一次 403；连续达到阈值则熔断 ytdlp 源一段时间。"""
+        self._ytdlp_403_streak += 1
+        if self._ytdlp_403_streak >= _YTDLP_403_STREAK_LIMIT and time.time() >= self._ytdlp_disabled_until:
+            self._ytdlp_disabled_until = time.time() + _YTDLP_403_COOLDOWN
+            log.warning("yt-dlp 连续 %d 次 403（疑似出口 IP 被 YouTube 风控），%d 秒内跳过 ytdlp 源",
+                        self._ytdlp_403_streak, _YTDLP_403_COOLDOWN)
+
+    def _reset_ytdlp_403(self):
+        if self._ytdlp_403_streak:
+            log.info("yt-dlp 恢复正常，清零 403 连续计数（%d）", self._ytdlp_403_streak)
+            self._ytdlp_403_streak = 0
+
+    def _run_ytdlp(self, args: list[str], timeout: int = _YTDLP_TIMEOUT,
+                   suppress_warnings: bool = True) -> subprocess.CompletedProcess:
+        """以模块方式调用 yt-dlp（不依赖 PATH 上的可执行文件）。
+
+        配置了 YouTube Cookie 且文件存在时自动附加 --cookies（登录态可显著降低 403 风控）。
+        """
+        if self.ytdlp_cookies and self.ytdlp_cookies.exists():
+            args = ["--cookies", str(self.ytdlp_cookies), *args]
+        command = [sys.executable, "-m", "yt_dlp"]
+        if suppress_warnings:
+            command.append("--no-warnings")
         return subprocess.run(
-            [sys.executable, "-m", "yt_dlp", "--no-warnings", *args],
+            [*command, *args],
             capture_output=True, text=True, timeout=timeout,
         )
+
+    def check_ytdlp_cookie(self, timeout: int = 60) -> dict:
+        """验证 YouTube Cookie，返回 valid/invalid/unknown 三态结果。
+
+        普通公开视频不要求登录，不能用来证明 Cookie 有效；这里探测需要登录的
+        YouTube 历史记录页。网络风控、403、PO Token 等情况统一返回 unknown，
+        避免把暂时的下载问题误判成 Cookie 失效。
+        """
+        path = self.ytdlp_cookies
+        if not path:
+            return {"state": "missing", "ok": False, "message": "未配置 YouTube Cookie 文件"}
+        if not path.exists():
+            return {"state": "missing", "ok": False,
+                    "message": f"Cookie 文件不存在: {path}"}
+        try:
+            head = path.read_text(encoding="utf-8", errors="replace")[:4096]
+        except OSError as e:
+            return {"state": "unknown", "ok": None, "message": f"无法读取 Cookie 文件: {e}"}
+        if not (head.startswith("# Netscape HTTP Cookie File")
+                or head.startswith("# HTTP Cookie File")):
+            return {"state": "invalid", "ok": False,
+                    "message": "Cookie 文件不是 Netscape/Mozilla 格式"}
+
+        try:
+            proc = self._run_ytdlp([
+                "--flat-playlist", "--playlist-end", "1", "--skip-download", "-J",
+                _YTDLP_COOKIE_PROBE_URL,
+            ], timeout=timeout, suppress_warnings=False)
+        except subprocess.TimeoutExpired:
+            return {"state": "unknown", "ok": None, "message": "YouTube Cookie 探测超时"}
+        except Exception as e:
+            return {"state": "unknown", "ok": None, "message": f"探测异常: {type(e).__name__}"}
+
+        text = f"{proc.stdout or ''}\n{proc.stderr or ''}".lower()
+        if ("cookies are no longer valid" in text
+                or "login_required" in text
+                or "sign in to confirm" in text
+                or "sign in to view" in text):
+            return {"state": "invalid", "ok": False,
+                    "message": "YouTube Cookie 已失效或登录态不足"}
+        if proc.returncode == 0:
+            return {"state": "valid", "ok": True, "message": "YouTube Cookie 探测成功"}
+
+        if "page needs to be reloaded" in text:
+            return {"state": "unknown", "ok": None,
+                    "message": "YouTube 要求重新加载，暂时无法确认 Cookie"}
+        if "403" in text or "429" in text or "bot" in text or "po token" in text:
+            return {"state": "unknown", "ok": None,
+                    "message": "YouTube 返回风控/验证错误，暂时无法确认 Cookie"}
+        return {"state": "unknown", "ok": None,
+                "message": "YouTube Cookie 探测失败，原因不明确"}
 
     def _ytdlp_search(self, query: str) -> list[dict]:
         """YouTube 搜索候选，返回 [{id, title, duration(秒)}]。"""
@@ -231,7 +316,10 @@ class MusicDLEngine:
             timeout=60,
         )
         if proc.returncode != 0:
-            log.warning("yt-dlp 搜索失败: %s", (proc.stderr or "").strip()[:200])
+            err = (proc.stderr or "").strip()[:200]
+            log.warning("yt-dlp 搜索失败: %s", err)
+            if "403" in err:
+                self._note_ytdlp_403()
             return []
         try:
             data = json.loads(proc.stdout)
@@ -281,6 +369,9 @@ class MusicDLEngine:
         return best[0][1]
 
     def _download_ytdlp(self, track) -> Path | None:
+        if time.time() < self._ytdlp_disabled_until:
+            log.debug("ytdlp 处于 403 熔断冷却期，跳过")
+            return None
         query = f"{track.artists[0] if track.artists else ''} {track.title}".strip()
         work = self.work_dir / YTDLP_SOURCE
         work.mkdir(parents=True, exist_ok=True)
@@ -295,9 +386,10 @@ class MusicDLEngine:
             return None
         vid = hit["id"]
         try:
-            # 直取 m4a 音频（无需 ffmpeg 转码），m4a 标签/时长校验/Navidrome 均原生支持
+            # 只取纯音频（优先 m4a，Navidrome 原生支持）；拿不到纯音频就失败，
+            # 交给源链下一个源，绝不回退到视频流（避免 MP4 视频混进音乐库）
             proc = self._run_ytdlp([
-                "-f", "bestaudio[ext=m4a]/bestaudio[ext=mp4]",
+                "-f", "bestaudio[ext=m4a]/bestaudio",
                 "--no-playlist",
                 "-o", str(work / "%(id)s.%(ext)s"),
                 "--", f"https://www.youtube.com/watch?v={vid}",
@@ -309,9 +401,12 @@ class MusicDLEngine:
             log.warning("yt-dlp 下载失败 %s: %s", query, e)
             return None
         if proc.returncode != 0:
-            log.warning("yt-dlp 下载失败(%s): %s", proc.returncode,
-                        (proc.stderr or "").strip()[:200])
+            err = (proc.stderr or "").strip()[:200]
+            log.warning("yt-dlp 下载失败(%s): %s", proc.returncode, err)
+            if "403" in err:
+                self._note_ytdlp_403()
             return None
+        self._reset_ytdlp_403()
         files = [p for p in work.glob(f"{vid}.*") if p.is_file()]
         if not files:
             log.warning("yt-dlp 下载后未找到产物: %s", vid)

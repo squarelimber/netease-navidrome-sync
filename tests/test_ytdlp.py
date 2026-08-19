@@ -87,6 +87,47 @@ def test_download_ytdlp_search_failed(tmp_path, monkeypatch):
     assert e._download_ytdlp(_track()) is None
 
 
+def test_check_ytdlp_cookie_missing(tmp_path):
+    e = MusicDLEngine(["ytdlp"], tmp_path / "work", ytdlp_cookies=tmp_path / "missing.txt")
+    result = e.check_ytdlp_cookie()
+    assert result["state"] == "missing"
+    assert result["ok"] is False
+
+
+def test_check_ytdlp_cookie_valid(tmp_path, monkeypatch):
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    e = MusicDLEngine(["ytdlp"], tmp_path / "work", ytdlp_cookies=cookie)
+    monkeypatch.setattr(MusicDLEngine, "_run_ytdlp",
+                        staticmethod(lambda args, timeout=60, **kwargs: _FakeProc(0, "{}", "")))
+    result = e.check_ytdlp_cookie()
+    assert result["state"] == "valid"
+    assert result["ok"] is True
+
+
+def test_check_ytdlp_cookie_invalid_is_distinguished(tmp_path, monkeypatch):
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    e = MusicDLEngine(["ytdlp"], tmp_path / "work", ytdlp_cookies=cookie)
+    monkeypatch.setattr(MusicDLEngine, "_run_ytdlp",
+                        staticmethod(lambda args, timeout=60, **kwargs: _FakeProc(
+                            1, "", "The provided YouTube account cookies are no longer valid")))
+    result = e.check_ytdlp_cookie()
+    assert result["state"] == "invalid"
+    assert result["ok"] is False
+
+
+def test_check_ytdlp_cookie_403_is_unknown(tmp_path, monkeypatch):
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    e = MusicDLEngine(["ytdlp"], tmp_path / "work", ytdlp_cookies=cookie)
+    monkeypatch.setattr(MusicDLEngine, "_run_ytdlp",
+                        staticmethod(lambda args, timeout=60, **kwargs: _FakeProc(1, "", "HTTP Error 403")))
+    result = e.check_ytdlp_cookie()
+    assert result["state"] == "unknown"
+    assert result["ok"] is None
+
+
 def test_engine_chain_uses_ytdlp(tmp_path, monkeypatch):
     e = MusicDLEngine(["netease", "ytdlp"], tmp_path / "w")
     fake_path = tmp_path / "w" / "x.mp3"

@@ -90,6 +90,7 @@ docker compose up -d --build
 | `sources.listenbrainz.username` | ListenBrainz 用户名 |
 | `sources.lastfm` | Last.fm API Key + 用户名 |
 | `download.sources` | 下载源链顺序，默认 `ytdlp` 优先（YouTube 兼容性最好，直取 m4a 无需 ffmpeg），musicdl 各源作后备 |
+| `download.ytdlp_cookies_file` | YouTube Cookie 文件路径（Netscape 格式，状态页可手动验证） |
 | `discover_daily_limit` | 每日新增推荐曲上限 |
 | `schedule.cron` | 每日任务时间，默认 `30 4 * * *` |
 | `web.port` | 状态页端口，默认 8678 |
@@ -142,6 +143,7 @@ music/
 
 - **登录门**：打开页面未登录时先显示扫码登录，扫码成功自动进入管理页（可跳过）
 - 网易云 Cookie 状态 ✓/✗，失效时可随时重新登录
+- YouTube Cookie 状态：可手动验证，并区分有效、明确失效与暂时无法判断
 - 下载源链、推荐源列表、听歌同步状态
 - 四类曲目统计（已下载/已存在/失败/待处理）
 - 搜索下载（搜索歌手/歌名一键下载）
@@ -166,7 +168,8 @@ docker compose restart navidrome-sync
 
 常见问题：
 
-- **Cookie 无效**：状态页重新扫码登录
+- **网易云 Cookie 无效**：状态页重新扫码登录
+- **YouTube Cookie 无效**：重新导出 Netscape 格式 Cookie；403 或风控错误会显示为“无法判断”，不会直接误报失效
 - **某首歌一直失败**：VIP 曲目且各平台均无免费音源，标记为 `dead`
 - **Navidrome 没扫到新文件**：确认 `Scanner.WatcherWait` 未被关闭
 

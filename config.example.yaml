@@ -53,6 +53,8 @@ download:
   # ytdlp 为 YouTube 兜底源（直取 m4a 音频，无需 ffmpeg，音质约 128-256k）：
   #   兼容性好（繁简/日语歌名均可），默认放首位，musicdl 各源作后备
   sources: [ytdlp, netease, kuwo, migu, bodian, qq]
+  # YouTube Cookie（Netscape 格式）；状态页可手动验证是否仍有效
+  ytdlp_cookies_file: /app/data/yt_cookies.txt
   # 两次下载之间的间隔秒数，避免触发风控
   interval_seconds: 2.0
   # 匹配校验：标题相似度阈值(0-100)

@@ -34,12 +34,16 @@ class Jobs:
         self.ncm = NCMAPIClient(cfg.ncm_api_url)
         self.last_cookie_ok: bool | None = None
         self.last_cookie_check_at = 0.0
+        self.youtube_cookie_status = {
+            "state": "unchecked", "ok": None, "message": "尚未验证", "checked_at": None,
+        }
         self.engine = MusicDLEngine(
             cfg.dl_sources, cfg.data_dir / "tmp_dl",
             netease_cookie=cfg.netease_cookie,
             title_threshold=cfg.title_threshold,
             max_duration_diff=cfg.max_duration_diff,
             interval=cfg.dl_interval,
+            ytdlp_cookies=cfg.ytdlp_cookies_file,
         )
         # 下载引擎必须先完成初始化，set_cookie() 会同步更新它的 Cookie。
         if cfg.netease_cookie:
@@ -92,7 +96,15 @@ class Jobs:
             title_threshold=self.cfg.title_threshold,
             max_duration_diff=self.cfg.max_duration_diff,
             interval=self.cfg.dl_interval,
+            ytdlp_cookies=self.cfg.ytdlp_cookies_file,
         )
+
+    def refresh_youtube_cookie_status(self) -> dict:
+        """主动验证 YouTube Cookie；结果区分有效、失效和暂时无法判断。"""
+        result = self.engine.check_ytdlp_cookie()
+        result["checked_at"] = time.time()
+        self.youtube_cookie_status = result
+        return result
 
     def reload_navidrome(self):
         """配置编辑器保存后重建 Subsonic 查重客户端。"""

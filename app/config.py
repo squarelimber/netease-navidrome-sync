@@ -41,6 +41,7 @@ class Config:
     sources: dict  # name -> SourceCfg
     discover_daily_limit: int
     dl_sources: list
+    ytdlp_cookies_file: Path
     dl_interval: float
     title_threshold: int
     max_duration_diff: int
@@ -111,6 +112,7 @@ def load() -> Config:
         sources=sources,
         discover_daily_limit=int(raw.get("discover_daily_limit", 40)),
         dl_sources=list(dl.get("sources", ["ytdlp", "netease", "kuwo", "migu", "bodian", "qq"])),
+        ytdlp_cookies_file=Path(dl.get("ytdlp_cookies_file", data_dir / "yt_cookies.txt")),
         dl_interval=float(dl.get("interval_seconds", 2.0)),
         title_threshold=int(dl.get("title_threshold", 85)),
         max_duration_diff=int(dl.get("max_duration_diff", 12)),

@@ -351,6 +351,7 @@ async function load() {
   document.getElementById('status').innerHTML = `
     <div class="kv-row"><span class="k">下载源链</span><span class="v">${st.dl_sources.join(' → ')}</span></div>
     <div class="kv-row"><span class="k">推荐源</span><span class="v">${st.enabled_sources.join('、') || '无'}</span></div>
+    ${youtubeCookieRow(st.youtube_cookie)}
     <div class="kv-row"><span class="k">听歌同步</span><span class="v">${st.scrobble || '<span class="muted">-</span>'}</span></div>
     <div class="kv-row"><span class="k">下次运行</span><span class="v">${st.next_run || '未知'}</span></div>
     <div class="kv-row"><span class="k">上次运行</span><span class="v">${fmt(st.last_run)}</span></div>`;
@@ -387,6 +388,21 @@ async function load() {
        <td class="muted">${t.fail_reason}</td><td>${t.attempts}</td>
        <td class="muted">${fmt(t.next_retry_at)}</td>
        <td><button class="btn ghost sm" onclick="retry(${t.id})">重试</button></td></tr>`).join('');
+}
+
+function youtubeCookieRow(v) {
+  v = v || {state:'unchecked', message:'尚未验证'};
+  const cls = v.state === 'valid' ? 'ok' : (v.state === 'invalid' || v.state === 'missing' ? 'bad' : 'warn');
+  const label = {valid:'有效', invalid:'失效', missing:'未配置', unknown:'无法判断', unchecked:'未验证'}[v.state] || '未验证';
+  const checked = v.checked_at ? ' · '+fmt(v.checked_at) : '';
+  return `<div class="kv-row"><span class="k">YouTube Cookie</span><span class="v"><span class="${cls}" title="${v.message || ''}">${label}${checked}</span> <button class="btn ghost sm" onclick="checkYoutubeCookie()">验证</button></span></div>`;
+}
+
+async function checkYoutubeCookie() {
+  const r = await (await fetch('/api/ytdlp-cookie/check', {method:'POST'})).json();
+  const type = r.state === 'valid' ? 'ok' : (r.state === 'invalid' || r.state === 'missing' ? 'bad' : 'warn');
+  toast((r.message || 'YouTube Cookie 校验完成'), type);
+  load();
 }
 
 async function triggerRun() {
@@ -666,6 +682,7 @@ def create_app(cfg, db, jobs, scheduler=None):
                 last_stats = {}
         return {
             "cookie_ok": _live_cookie_ok(jobs),
+            "youtube_cookie": jobs.youtube_cookie_status,
             "dl_sources": cfg.dl_sources,
             "enabled_sources": enabled,
             "next_run": next_run,
@@ -708,6 +725,15 @@ def create_app(cfg, db, jobs, scheduler=None):
         jobs.stop()
         return {"ok": True}
 
+    @app.post("/api/ytdlp-cookie/check")
+    def check_ytdlp_cookie():
+        """手动验证 YouTube Cookie，不返回 Cookie 内容。"""
+        try:
+            return jobs.refresh_youtube_cookie_status()
+        except Exception as e:
+            log.warning("YouTube Cookie 校验异常: %s", type(e).__name__)
+            return {"state": "unknown", "ok": None, "message": "校验异常"}
+
     @app.post("/api/retry/{track_id}")
     def retry(track_id: int):
         db.reset_retry(track_id)
@@ -742,8 +768,9 @@ def create_app(cfg, db, jobs, scheduler=None):
             cfg._path.write_text(yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False), encoding="utf-8")
             from . import config as config_mod
             new_cfg = config_mod.load()
+            old_ytdlp_cookie_file = cfg.ytdlp_cookies_file
             for at in ("music_dir","data_dir","ncm_api_url","cron","discover_daily_limit",
-                       "dl_sources","dl_interval",
+                       "dl_sources","dl_interval","ytdlp_cookies_file",
                        "title_threshold","max_duration_diff","run_on_startup",
                        "web_host","web_port","web_auth_user","web_auth_password"):
                 setattr(cfg, at, getattr(new_cfg, at))
@@ -752,6 +779,10 @@ def create_app(cfg, db, jobs, scheduler=None):
             if cfg.netease_cookie != new_cfg.netease_cookie:
                 cfg.netease_cookie = new_cfg.netease_cookie
                 jobs.set_cookie(cfg.netease_cookie)
+            if cfg.ytdlp_cookies_file != old_ytdlp_cookie_file:
+                jobs.youtube_cookie_status = {
+                    "state": "unchecked", "ok": None, "message": "尚未验证", "checked_at": None,
+                }
             jobs.apply_engine_config()
             jobs.reload_navidrome()
             if scheduler:
