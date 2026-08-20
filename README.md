@@ -97,6 +97,7 @@ docker compose up -d --build
 | `download.sources` | 下载源链顺序，默认 `ytdlp` 优先（YouTube 兼容性好，优先直取音频格式，无需 ffmpeg），musicdl 各源作后备 |
 | `download.ytdlp_cookies_file` | YouTube Cookie 文件路径（Netscape 格式）；存在时会与匿名模式并行探测格式，状态页可手动验证 |
 | `discover_daily_limit` | 每日新增推荐曲上限 |
+| `playlist_retention_days` | 自动推荐歌单保留天数，默认 3 天（包含今天）；只删除旧 `.m3u8` 和数据库关联，不删除音频文件 |
 | `schedule.cron` | 每日任务时间，默认 `30 4 * * *` |
 | `web.port` | 状态页端口，默认 8678 |
 | `web.auth_user/auth_password` | 可选：状态页 Basic Auth（留空则不启用） |
@@ -194,6 +195,8 @@ docker compose restart navidrome-sync
 常见问题：
 
 - **网易云 Cookie 无效**：状态页重新扫码登录
+- **旧推荐歌单**：每天任务完成后自动清理超过 `playlist_retention_days` 的网易云日推、ListenBrainz CF 和 Last.fm 推荐 `.m3u8`；固定歌单和音频文件不会删除
+- **网易云听歌回传全部失败（502/405）**：Cookie 校验成功不代表 `/scrobble` 上游可用；回传已按 2 秒限速并对临时 502/频控响应自动重试。若仍持续失败，检查 ncm-api 容器的 `HTTP_PROXY/HTTPS_PROXY` 等代理环境变量，以及容器到网易云的 TLS 连接
 - **YouTube Cookie 无效**：重新导出 Netscape 格式 Cookie；403 或风控错误会显示为“无法判断”，不会直接误报失效
 - **yt-dlp 报 403/503 或没有 m4a**：先看日志中的两次格式探测结果；程序会比较匿名/Cookie 模式，并自动尝试 `m4a`、`mp4`、`aac` 中实际可用的音频格式。两种模式都没有直链时才会切换到 musicdl 后备源
 - **某首歌一直失败**：VIP 曲目且各平台均无免费音源，标记为 `dead`

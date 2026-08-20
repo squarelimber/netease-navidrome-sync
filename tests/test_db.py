@@ -23,3 +23,16 @@ def test_db_basic_ops(tmp_path):
     db.mark_downloaded("a::b", "x/y.mp3", "netease")
     assert db.get_track("a::b")["status"] == "downloaded"
     db.close()
+
+
+def test_delete_playlist_keeps_track(tmp_path):
+    db = DB(tmp_path / "test.db")
+    db.upsert_track("a::b", "b", ["a"], origin="lastfm",
+                    playlist="LastFM-推荐-2026-08-20")
+    db.mark_downloaded("a::b", "Discover/a.mp3", "kuwo")
+    db.add_playlist_item("LastFM-推荐-2026-08-20", "a::b")
+    assert "LastFM-推荐-2026-08-20" in db.playlist_names()
+    db.delete_playlist("LastFM-推荐-2026-08-20")
+    assert "LastFM-推荐-2026-08-20" not in db.playlist_names()
+    assert db.get_track("a::b")["file_path"] == "Discover/a.mp3"
+    db.close()

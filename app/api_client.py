@@ -6,12 +6,16 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import requests
 
 log = logging.getLogger(__name__)
 
 TIMEOUT = 25
+_TRANSIENT_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+_REQUEST_RETRY_ATTEMPTS = 2
+_REQUEST_RETRY_DELAY = 2.0
 
 
 class NCMAPIClient:
@@ -50,10 +54,39 @@ class NCMAPIClient:
             log.warning("api-enhanced 请求失败 %s (HTTP %s): %s | %s",
                         path, status, type(e).__name__, snippet)
             return {"code": -1, "msg": str(e), "_request_error": True,
-                    "_http_status": status}
+                    "_http_status": status, "_error_snippet": snippet}
         except ValueError as e:
             log.warning("api-enhanced 响应不是合法 JSON %s: %s", path, e)
             return {"code": -1, "msg": str(e)}
+
+    @staticmethod
+    def _is_transient_response(data: dict) -> bool:
+        """判断是否值得短暂退避后重试。"""
+        status = data.get("_http_status")
+        if status in _TRANSIENT_HTTP_STATUS:
+            return True
+        text = " ".join(str(data.get(key) or "") for key in
+                         ("msg", "message", "_error_snippet")).lower()
+        # 网易云常用 HTTP 405 返回“操作频繁”，它不是方法错误，而是频控响应。
+        return any(marker in text for marker in (
+            "操作频繁", "请求频繁", "too many requests", "rate limit",
+            "socket disconnected", "temporarily unavailable",
+        ))
+
+    def _get_retry(self, path: str, **params) -> dict:
+        """对搜索/回传等易受频控影响的请求做一次短退避重试。"""
+        result = {}
+        for attempt in range(_REQUEST_RETRY_ATTEMPTS):
+            result = self._get(path, **params)
+            if result.get("code") == 200:
+                return result
+            if attempt + 1 >= _REQUEST_RETRY_ATTEMPTS or not self._is_transient_response(result):
+                return result
+            log.info("api-enhanced %s 暂时失败，%.1f 秒后重试 (%d/%d)",
+                     path, _REQUEST_RETRY_DELAY, attempt + 1,
+                     _REQUEST_RETRY_ATTEMPTS - 1)
+            time.sleep(_REQUEST_RETRY_DELAY)
+        return result
 
     # ------- 登录 -------
 
@@ -83,8 +116,8 @@ class NCMAPIClient:
 
     def search(self, keywords: str, limit: int = 30, offset: int = 0) -> list:
         """搜索单曲，返回标准化列表。"""
-        j = self._get("/cloudsearch", keywords=keywords, limit=limit, offset=offset,
-                       type=1)
+        j = self._get_retry("/cloudsearch", keywords=keywords, limit=limit,
+                            offset=offset, type=1)
         if j.get("code") != 200:
             return []
         songs = (j.get("result") or {}).get("songs", [])
@@ -176,5 +209,5 @@ class NCMAPIClient:
 
     def scrobble(self, song_id: int, time_ms: int = 180000) -> bool:
         """写入听歌记录（最近播放 + 听歌排行计数）。"""
-        j = self._get("/scrobble", id=song_id, sourceid=song_id, time=time_ms)
+        j = self._get_retry("/scrobble", id=song_id, sourceid=song_id, time=time_ms)
         return j.get("code") == 200

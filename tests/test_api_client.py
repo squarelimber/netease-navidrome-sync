@@ -60,3 +60,34 @@ def test_playlist_track_all():
 def test_playlist_track_all_error_returns_empty():
     c = _client(lambda path, **params: {"code": -1})
     assert c.playlist_track_all(1) == []
+
+
+def test_scrobble_retries_transient_502(monkeypatch):
+    calls = []
+
+    def fake_get(path, **params):
+        calls.append(path)
+        if len(calls) == 1:
+            return {"code": -1, "_request_error": True, "_http_status": 502}
+        return {"code": 200}
+
+    c = _client(fake_get)
+    monkeypatch.setattr("app.api_client.time.sleep", lambda _: None)
+    assert c.scrobble(123) is True
+    assert calls == ["/scrobble", "/scrobble"]
+
+
+def test_search_retries_rate_limit_405(monkeypatch):
+    calls = []
+
+    def fake_get(path, **params):
+        calls.append(path)
+        if len(calls) == 1:
+            return {"code": -1, "_request_error": True, "_http_status": 405,
+                    "_error_snippet": '{"code":405,"msg":"操作频繁，请稍候再试"}'}
+        return {"code": 200, "result": {"songs": [_song(1)]}}
+
+    c = _client(fake_get)
+    monkeypatch.setattr("app.api_client.time.sleep", lambda _: None)
+    assert c.search("晴天", limit=5)[0]["id"] == 1
+    assert calls == ["/cloudsearch", "/cloudsearch"]

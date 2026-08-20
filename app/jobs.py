@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -25,6 +27,24 @@ from .util import RateLimiter, safe_name, track_key
 log = logging.getLogger(__name__)
 
 DISCOVER_DIR = "Discover"
+_AUTO_PLAYLIST_PATTERNS = (
+    re.compile(r"^网易云日推-(\d{4}-\d{2}-\d{2})$"),
+    re.compile(r"^ListenBrainz-CF-(\d{4}-\d{2}-\d{2})$"),
+    re.compile(r"^LastFM-推荐-(\d{4}-\d{2}-\d{2})$"),
+)
+
+
+def _automatic_playlist_date(name: str) -> datetime.date | None:
+    """返回自动推荐歌单的日期；固定/手动歌单返回 None。"""
+    for pattern in _AUTO_PLAYLIST_PATTERNS:
+        match = pattern.fullmatch(str(name or ""))
+        if not match:
+            continue
+        try:
+            return datetime.date.fromisoformat(match.group(1))
+        except ValueError:
+            return None
+    return None
 
 
 class Jobs:
@@ -53,6 +73,9 @@ class Jobs:
             if cfg.navidrome.enabled else None
         )
         self.ncm_limiter = RateLimiter(0.5)
+        # ListenBrainz 回传会连续调用 cloudsearch + scrobble；单独限速，避免
+        # 一次任务触发网易云的频控或让 ncm-api 上游连接雪崩。
+        self.scrobble_limiter = RateLimiter(2.0)
         self._lock = threading.Lock()
         self._abort = threading.Event()
         self.aborted = False
@@ -272,6 +295,37 @@ class Jobs:
             except Exception as e:
                 log.error("生成歌单文件失败 %s: %s", playlist, e)
 
+    def _cleanup_old_playlists(self):
+        """删除过期的自动推荐歌单文件和数据库关联，保留音频文件。"""
+        retention = max(1, int(getattr(self.cfg, "playlist_retention_days", 3)))
+        cutoff = datetime.date.today() - datetime.timedelta(days=retention - 1)
+        discover_dir = self.cfg.music_dir / DISCOVER_DIR
+        candidates: set[str] = set()
+
+        # 数据库记录可能没有对应的 m3u8 文件，文件扫描也可能发现尚未写入数据库的旧文件。
+        for name in self.db.playlist_names():
+            playlist_date = _automatic_playlist_date(name)
+            if playlist_date and playlist_date < cutoff:
+                candidates.add(name)
+        if discover_dir.exists():
+            for path in discover_dir.glob("*.m3u8"):
+                playlist_date = _automatic_playlist_date(path.stem)
+                if playlist_date and playlist_date < cutoff:
+                    candidates.add(path.stem)
+
+        for playlist in sorted(candidates):
+            self.db.delete_playlist(playlist)
+            removed_files = 0
+            target = discover_dir / f"{safe_name(playlist)}.m3u8"
+            try:
+                if target.exists():
+                    target.unlink()
+                    removed_files = 1
+            except OSError as e:
+                log.warning("删除过期歌单文件失败 %s: %s", target, e)
+            log.info("已清理过期自动歌单 %s（删除 %d 个歌单文件，音频文件保留）",
+                     playlist, removed_files)
+
     # ---------- 听歌回传 ----------
 
     def _scrobble_recent(self) -> dict:
@@ -310,7 +364,7 @@ class Jobs:
             if l["listened_at"] <= last_ts and listen_key not in pending:
                 continue
             try:
-                self.ncm_limiter.wait()
+                self.scrobble_limiter.wait()
                 candidates = self.ncm.search(f"{l['artist']} {l['title']}", limit=5)
                 track = Track(title=l["title"], artists=[l["artist"]],
                               duration_ms=l.get("duration_ms", 0))
@@ -326,6 +380,7 @@ class Jobs:
                     pending.add(listen_key)
                     continue
                 time_ms = l.get("duration_ms", 180000) or 180000
+                self.scrobble_limiter.wait()
                 if self.ncm.scrobble(hit["id"], time_ms):
                     success += 1
                     if l["listened_at"] > max_ts:
@@ -343,8 +398,10 @@ class Jobs:
         if max_ts > last_ts:
             self.db.set_property(SCROBBLE_TS_KEY, str(max_ts))
         self.db.set_property(SCROBBLE_PENDING_KEY, json.dumps(sorted(pending), ensure_ascii=False))
-        log.info("听歌回传: %d 成功, %d 失败（跳过 %d 首）", success, fail, len(listens) - success - fail)
-        return {"ok": True, "count": success, "fail": fail, "total": len(listens)}
+        skipped = len(listens) - success - fail
+        log.info("听歌回传: %d 成功, %d 失败（跳过 %d 首）", success, fail, skipped)
+        return {"ok": fail == 0, "count": success,
+                "fail": fail, "total": len(listens)}
 
     # ---------- 主流程 ----------
 
@@ -449,6 +506,7 @@ class Jobs:
 
             # 5. 重建受影响的歌单文件
             self._regen_playlist_files(list(affected_playlists))
+            self._cleanup_old_playlists()
 
             # 6. 听歌回传到网易云
             try:

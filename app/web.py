@@ -770,6 +770,7 @@ def create_app(cfg, db, jobs, scheduler=None):
             new_cfg = config_mod.load()
             old_ytdlp_cookie_file = cfg.ytdlp_cookies_file
             for at in ("music_dir","data_dir","ncm_api_url","cron","discover_daily_limit",
+                       "playlist_retention_days",
                        "dl_sources","dl_interval","ytdlp_cookies_file",
                        "title_threshold","max_duration_diff","run_on_startup",
                        "web_host","web_port","web_auth_user","web_auth_password"):

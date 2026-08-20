@@ -46,6 +46,9 @@ sources:
 # 每日最多新增的"推荐类"曲目数（歌单同步不受此限制）
 discover_daily_limit: 40
 
+# 自动推荐歌单保留的最近天数（包含今天；只删除旧 .m3u8 和数据库歌单关联，不删除音频）
+playlist_retention_days: 3
+
 # ============ 下载 ============
 download:
   # musicdl 下载源优先级链（按顺序尝试）。可选:

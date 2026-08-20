@@ -185,6 +185,18 @@ class DB:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def playlist_names(self):
+        """返回数据库中所有歌单名称，用于清理过期的自动歌单。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT playlist FROM playlist_items WHERE playlist != ''"
+        ).fetchall()
+        return [r["playlist"] for r in rows]
+
+    def delete_playlist(self, playlist: str):
+        """删除歌单关联记录，但保留曲目和实际音频文件。"""
+        self.conn.execute("DELETE FROM playlist_items WHERE playlist=?", (playlist,))
+        self.conn.commit()
+
     # ---------- runs ----------
 
     def run_start(self):

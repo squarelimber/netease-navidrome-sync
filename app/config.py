@@ -40,6 +40,7 @@ class Config:
     cookie_file: Path
     sources: dict  # name -> SourceCfg
     discover_daily_limit: int
+    playlist_retention_days: int
     dl_sources: list
     ytdlp_cookies_file: Path
     dl_interval: float
@@ -111,6 +112,7 @@ def load() -> Config:
         cookie_file=cookie_file,
         sources=sources,
         discover_daily_limit=int(raw.get("discover_daily_limit", 40)),
+        playlist_retention_days=max(1, int(raw.get("playlist_retention_days", 3))),
         dl_sources=list(dl.get("sources", ["ytdlp", "netease", "kuwo", "migu", "bodian", "qq"])),
         ytdlp_cookies_file=Path(dl.get("ytdlp_cookies_file", data_dir / "yt_cookies.txt")),
         dl_interval=float(dl.get("interval_seconds", 2.0)),
