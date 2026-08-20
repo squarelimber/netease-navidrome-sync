@@ -61,11 +61,18 @@ def test_pick_empty_entries(tmp_path):
 def test_download_ytdlp_flow(tmp_path, monkeypatch):
     e = _engine(tmp_path)
 
-    def fake_run(args, timeout=240):
-        if "-J" in args and "--flat-playlist" in args:
+    def fake_run(args, timeout=240, **kwargs):
+        if "ytsearch" in " ".join(args):
             payload = {"entries": [
                 {"id": "VIDEO1", "title": "周杰伦 - 晴天 (Official)", "duration": 260},
             ]}
+            return _FakeProc(0, json.dumps(payload), "")
+        if "-J" in args and "https://www.youtube.com/watch?v=VIDEO1" in args:
+            payload = {"formats": [{
+                "format_id": "140", "ext": "m4a", "vcodec": "none",
+                "acodec": "mp4a.40.2", "abr": 129, "protocol": "https",
+                "url": "https://example.test/audio",
+            }]}
             return _FakeProc(0, json.dumps(payload), "")
         if "-f" in args:
             vid = [a.split("=")[1] for a in args if a.startswith("https://")][0]
@@ -83,7 +90,7 @@ def test_download_ytdlp_flow(tmp_path, monkeypatch):
 def test_download_ytdlp_search_failed(tmp_path, monkeypatch):
     e = _engine(tmp_path)
     monkeypatch.setattr(MusicDLEngine, "_run_ytdlp",
-                        staticmethod(lambda args, timeout=240: _FakeProc(1, "", "err")))
+                        staticmethod(lambda args, timeout=240, **kwargs: _FakeProc(1, "", "err")))
     assert e._download_ytdlp(_track()) is None
 
 
@@ -126,6 +133,47 @@ def test_check_ytdlp_cookie_403_is_unknown(tmp_path, monkeypatch):
     result = e.check_ytdlp_cookie()
     assert result["state"] == "unknown"
     assert result["ok"] is None
+
+
+def test_download_chooses_mode_with_m4a(tmp_path, monkeypatch):
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    e = MusicDLEngine(["ytdlp"], tmp_path / "work", ytdlp_cookies=cookie)
+    calls = []
+
+    def fake_run(args, timeout=240, **kwargs):
+        calls.append((args, kwargs))
+        if "ytsearch" in " ".join(args):
+            return _FakeProc(0, json.dumps({"entries": [
+                {"id": "VIDEO2", "title": "周杰伦 - 晴天", "duration": 260},
+            ]}), "")
+        if "-J" in args:
+            if kwargs.get("use_cookies"):
+                payload = {"formats": [{
+                    "format_id": "140", "ext": "m4a", "vcodec": "none",
+                    "acodec": "mp4a.40.2", "abr": 129, "protocol": "https",
+                    "url": "https://example.test/cookie-audio",
+                }]}
+            else:
+                payload = {"formats": [{
+                    "format_id": "18", "ext": "mp4", "vcodec": "avc1",
+                    "acodec": "mp4a.40.2", "abr": 143, "protocol": "https",
+                    "url": "https://example.test/video",
+                }]}
+            return _FakeProc(0, json.dumps(payload), "")
+        if "-f" in args:
+            assert "140" in args
+            out = tmp_path / "work" / "ytdlp" / "VIDEO2.m4a"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"z" * 200 * 1024)
+            return _FakeProc(0, "", "")
+        return _FakeProc(1, "", "boom")
+
+    monkeypatch.setattr(MusicDLEngine, "_run_ytdlp", staticmethod(fake_run))
+    path = e._download_ytdlp(_track())
+    assert path is not None and path.name == "VIDEO2.m4a"
+    download_calls = [c for c in calls if "-f" in c[0]]
+    assert download_calls and download_calls[0][1]["use_cookies"] is True
 
 
 def test_engine_chain_uses_ytdlp(tmp_path, monkeypatch):

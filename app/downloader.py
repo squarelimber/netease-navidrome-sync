@@ -243,12 +243,12 @@ class MusicDLEngine:
             self._ytdlp_403_streak = 0
 
     def _run_ytdlp(self, args: list[str], timeout: int = _YTDLP_TIMEOUT,
-                   suppress_warnings: bool = True) -> subprocess.CompletedProcess:
+                   suppress_warnings: bool = True, use_cookies: bool = True) -> subprocess.CompletedProcess:
         """以模块方式调用 yt-dlp（不依赖 PATH 上的可执行文件）。
 
         配置了 YouTube Cookie 且文件存在时自动附加 --cookies（登录态可显著降低 403 风控）。
         """
-        if self.ytdlp_cookies and self.ytdlp_cookies.exists():
+        if use_cookies and self.ytdlp_cookies and self.ytdlp_cookies.exists():
             args = ["--cookies", str(self.ytdlp_cookies), *args]
         command = [sys.executable, "-m", "yt_dlp"]
         if suppress_warnings:
@@ -309,11 +309,11 @@ class MusicDLEngine:
         return {"state": "unknown", "ok": None,
                 "message": "YouTube Cookie 探测失败，原因不明确"}
 
-    def _ytdlp_search(self, query: str) -> list[dict]:
+    def _ytdlp_search(self, query: str, use_cookies: bool = True) -> list[dict]:
         """YouTube 搜索候选，返回 [{id, title, duration(秒)}]。"""
         proc = self._run_ytdlp(
             ["-J", "--flat-playlist", "--skip-download", f"ytsearch{_YTDLP_SEARCH_COUNT}:{query}"],
-            timeout=60,
+            timeout=60, use_cookies=use_cookies,
         )
         if proc.returncode != 0:
             err = (proc.stderr or "").strip()[:200]
@@ -368,6 +368,68 @@ class MusicDLEngine:
         best.sort(key=lambda x: x[0], reverse=True)
         return best[0][1]
 
+    @staticmethod
+    def _best_direct_audio_format(info: dict) -> dict | None:
+        """从 yt-dlp JSON 中选出可直接入库的音频-only 格式。"""
+        candidates = []
+        for fmt in (info.get("formats") or []):
+            if not isinstance(fmt, dict):
+                continue
+            ext = str(fmt.get("ext") or "").lower()
+            if ext not in ("m4a", "mp4", "aac"):
+                continue
+            if str(fmt.get("vcodec") or "none").lower() not in ("none", ""):
+                continue
+            if str(fmt.get("acodec") or "none").lower() in ("none", ""):
+                continue
+            format_id = str(fmt.get("format_id") or "")
+            if not format_id or not fmt.get("url"):
+                continue
+            protocol = str(fmt.get("protocol") or "").lower()
+            if protocol not in ("http", "https", "m3u8", "m3u8_native"):
+                continue
+            try:
+                abr = float(fmt.get("abr") or fmt.get("tbr") or 0)
+            except (TypeError, ValueError):
+                abr = 0.0
+            ext_rank = {"m4a": 3, "mp4": 2, "aac": 1}[ext]
+            protocol_rank = 1 if protocol in ("http", "https") else 0
+            candidates.append((ext_rank, protocol_rank, abr, fmt))
+        if not candidates:
+            return None
+        _, _, best_abr, best = max(candidates, key=lambda item: item[:3])
+        return {
+            "format_id": str(best["format_id"]),
+            "ext": str(best.get("ext") or "").lower(),
+            "abr": best_abr,
+        }
+
+    def _probe_ytdlp_formats(self, vid: str, use_cookies: bool) -> dict:
+        """探测一个视频在指定 Cookie 模式下的格式列表。"""
+        try:
+            proc = self._run_ytdlp([
+                "-J", "--skip-download", "--no-playlist",
+                "--", f"https://www.youtube.com/watch?v={vid}",
+            ], timeout=60, suppress_warnings=False, use_cookies=use_cookies)
+        except subprocess.TimeoutExpired:
+            return {"use_cookies": use_cookies, "format": None, "error": "探测超时"}
+        except Exception as e:
+            return {"use_cookies": use_cookies, "format": None,
+                    "error": f"探测异常: {type(e).__name__}"}
+        text = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        if proc.returncode != 0:
+            return {"use_cookies": use_cookies, "format": None,
+                    "error": text.strip()[:240] or f"退出码 {proc.returncode}"}
+        try:
+            info = json.loads(proc.stdout)
+        except (TypeError, ValueError):
+            return {"use_cookies": use_cookies, "format": None, "error": "JSON 解析失败"}
+        return {
+            "use_cookies": use_cookies,
+            "format": self._best_direct_audio_format(info),
+            "error": "",
+        }
+
     def _download_ytdlp(self, track) -> Path | None:
         if time.time() < self._ytdlp_disabled_until:
             log.debug("ytdlp 处于 403 熔断冷却期，跳过")
@@ -377,6 +439,8 @@ class MusicDLEngine:
         work.mkdir(parents=True, exist_ok=True)
         try:
             entries = self._ytdlp_search(query)
+            if not entries and self.ytdlp_cookies and self.ytdlp_cookies.exists():
+                entries = self._ytdlp_search(query, use_cookies=False)
         except Exception as e:
             log.warning("yt-dlp 不可用（%s）", e)
             return None
@@ -385,37 +449,65 @@ class MusicDLEngine:
             log.info("yt-dlp 无有效匹配: %s", query)
             return None
         vid = hit["id"]
-        try:
-            # 只取纯音频（优先 m4a，Navidrome 原生支持）；拿不到纯音频就失败，
-            # 交给源链下一个源，绝不回退到视频流（避免 MP4 视频混进音乐库）
-            proc = self._run_ytdlp([
-                "-f", "bestaudio[ext=m4a]/bestaudio",
-                "--no-playlist",
-                "-o", str(work / "%(id)s.%(ext)s"),
-                "--", f"https://www.youtube.com/watch?v={vid}",
-            ])
-        except subprocess.TimeoutExpired:
-            log.warning("yt-dlp 下载超时: %s", query)
+        modes = [False]
+        if self.ytdlp_cookies and self.ytdlp_cookies.exists():
+            modes.append(True)
+        variants = []
+        for use_cookies in modes:
+            probe = self._probe_ytdlp_formats(vid, use_cookies)
+            fmt = probe.get("format")
+            if fmt:
+                variants.append({**fmt, "use_cookies": use_cookies})
+                log.info("yt-dlp 格式探测 %s: mode=%s, format=%s, abr=%.0fk",
+                         vid, "cookie" if use_cookies else "anonymous",
+                         fmt["format_id"], fmt["abr"])
+            else:
+                log.info("yt-dlp 格式探测 %s: mode=%s, 无可用音频格式%s",
+                         vid, "cookie" if use_cookies else "anonymous",
+                         f" ({probe['error'][:120]})" if probe.get("error") else "")
+        # m4a > mp4 > aac；同等格式优先 Cookie 模式，以降低匿名 503 的影响。
+        variants.sort(key=lambda v: (
+            {"m4a": 3, "mp4": 2, "aac": 1}.get(v["ext"], 0),
+            v["abr"],
+            int(v["use_cookies"]),
+        ), reverse=True)
+        if not variants:
+            log.warning("yt-dlp 两种模式都没有可用音频格式: %s", query)
             return None
-        except Exception as e:
-            log.warning("yt-dlp 下载失败 %s: %s", query, e)
-            return None
-        if proc.returncode != 0:
-            err = (proc.stderr or "").strip()[:200]
-            log.warning("yt-dlp 下载失败(%s): %s", proc.returncode, err)
-            if "403" in err:
-                self._note_ytdlp_403()
-            return None
-        self._reset_ytdlp_403()
-        files = [p for p in work.glob(f"{vid}.*") if p.is_file()]
-        if not files:
-            log.warning("yt-dlp 下载后未找到产物: %s", vid)
-            return None
-        save_path = max(files, key=lambda p: p.stat().st_size)
-        if save_path.stat().st_size < 100 * 1024:
-            log.warning("yt-dlp 下载文件无效: %s", save_path)
-            return None
-        return save_path
+
+        for variant in variants:
+            try:
+                proc = self._run_ytdlp([
+                    "-f", variant["format_id"],
+                    "--no-playlist",
+                    "-o", str(work / "%(id)s.%(ext)s"),
+                    "--", f"https://www.youtube.com/watch?v={vid}",
+                ], use_cookies=variant["use_cookies"])
+            except subprocess.TimeoutExpired:
+                log.warning("yt-dlp 下载超时: %s (mode=%s)",
+                            query, "cookie" if variant["use_cookies"] else "anonymous")
+                continue
+            except Exception as e:
+                log.warning("yt-dlp 下载失败 %s: %s", query, e)
+                continue
+            if proc.returncode != 0:
+                err = (proc.stderr or "").strip()[:200]
+                log.warning("yt-dlp 下载失败(%s, mode=%s): %s", proc.returncode,
+                            "cookie" if variant["use_cookies"] else "anonymous", err)
+                if "403" in err:
+                    self._note_ytdlp_403()
+                continue
+            self._reset_ytdlp_403()
+            files = [p for p in work.glob(f"{vid}.*") if p.is_file()]
+            if not files:
+                log.warning("yt-dlp 下载后未找到产物: %s", vid)
+                continue
+            save_path = max(files, key=lambda p: p.stat().st_size)
+            if save_path.stat().st_size < 100 * 1024:
+                log.warning("yt-dlp 下载文件无效: %s", save_path)
+                continue
+            return save_path
+        return None
 
 
 # ---------------- 元数据内嵌 ----------------
