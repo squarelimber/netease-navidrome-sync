@@ -3,7 +3,8 @@
 一个配合 [Navidrome](https://www.navidrome.org) 使用的曲库辅助工具。
 
 每日自动聚合 **网易云日推 / ListenBrainz / Last.fm** 的推荐，
-通过 [musicdl](https://github.com/CharlesPikachu/musicdl) 多平台下载引擎匹配下载，
+通过 [musicdl](https://github.com/CharlesPikachu/musicdl) 多平台下载引擎与
+[yt-dlp](https://github.com/yt-dlp/yt-dlp) YouTube 源匹配下载，
 内嵌标签/封面/歌词，写入 Navidrome 音乐目录，文件系统监听 + m3u8 自动入库。
 
 ```
@@ -20,7 +21,8 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
 
 - **三源推荐聚合**：网易云每日推荐（30 首/天）、ListenBrainz 协同过滤 + 官方每周歌单、Last.fm 常听/最爱的相似曲目
 - **指定网易云歌单同步**：持续同步"我喜欢的音乐"等歌单到 Navidrome
-- **多源下载链**：基于 [musicdl](https://github.com/CharlesPikachu/musicdl) 的多平台下载（网易云→酷我→咪咕→波点→QQ），单源失败自动降级；`ytdlp` 兜底源（YouTube 搜索匹配，专治各平台无源的 VIP 曲目），默认置于源链首位
+- **多源下载链**：基于 [musicdl](https://github.com/CharlesPikachu/musicdl) 的多平台下载（网易云→酷我→咪咕→波点→QQ），单源失败自动降级；`ytdlp` YouTube 源默认置于源链首位，各平台无源时仍可继续尝试
+- **YouTube 双模式格式探测**：对同一候选视频分别探测匿名模式和 Cookie 模式的可用格式，优先选择可直接入库的 `m4a`，其次 `mp4`/`aac`；下载失败会尝试另一种模式
 - **繁简自动归一**：匹配与去重前自动将繁体转为简体（opencc），繁体歌单/曲库元数据不再失配
 - **网易云扫码登录**：状态页点"显示二维码"用 App 扫码登录，自动注入 Cookie
 - **搜索下载**：状态页搜索歌手/歌名，一键下载
@@ -30,6 +32,7 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
 - **听歌回传**：每日自动将 ListenBrainz 的新播放记录回传到网易云（听歌排行 + 最近播放）
 - **失败重试队列**：匹配/下载失败自动入队，按退避策略每日重试
 - **轻量状态页**：Cookie 健康、统计、运行历史、失败队列，可暂停刷新、中止任务、逐条重试
+- **滚动日志**：日志按天午夜滚动，保留最近 14 个历史文件
 - **Docker 一键部署**：两个容器（ncm-api + 本工具），共享音乐目录
 
 ## 系统要求
@@ -63,9 +66,11 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
 
 > 后续更新只需 `git pull && docker compose restart navidrome-sync`，.py 文件已热挂载，无需 rebuild。
 
+> 镜像会在构建阶段安装 Deno，供 yt-dlp 的 YouTube 提取使用；如果构建环境无法访问 GitHub，需要为 Docker 配置可用的网络代理或 Deno 发布镜像。
+
 > **国内网络加速构建**：如果 pip 下载慢，可加 `--build-arg` 指定镜像源：
 > `docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple navidrome-sync`
-> （本镜像不依赖 apt/ffmpeg，构建只包含 pip 安装，速度瓶颈仅在 pip 下载）
+> （本镜像不依赖 apt/ffmpeg；构建阶段还会下载 Deno，网络质量会同时影响 pip 和 Deno 下载）
 
 ### 方式 B：用 git 克隆
 
@@ -89,8 +94,8 @@ docker compose up -d --build
 | `sources.netease_playlists.playlists` | 要同步的歌单列表 |
 | `sources.listenbrainz.username` | ListenBrainz 用户名 |
 | `sources.lastfm` | Last.fm API Key + 用户名 |
-| `download.sources` | 下载源链顺序，默认 `ytdlp` 优先（YouTube 兼容性最好，直取 m4a 无需 ffmpeg），musicdl 各源作后备 |
-| `download.ytdlp_cookies_file` | YouTube Cookie 文件路径（Netscape 格式，状态页可手动验证） |
+| `download.sources` | 下载源链顺序，默认 `ytdlp` 优先（YouTube 兼容性好，优先直取音频格式，无需 ffmpeg），musicdl 各源作后备 |
+| `download.ytdlp_cookies_file` | YouTube Cookie 文件路径（Netscape 格式）；存在时会与匿名模式并行探测格式，状态页可手动验证 |
 | `discover_daily_limit` | 每日新增推荐曲上限 |
 | `schedule.cron` | 每日任务时间，默认 `30 4 * * *` |
 | `web.port` | 状态页端口，默认 8678 |
@@ -104,6 +109,23 @@ docker compose up -d --build
 3. 粘贴到 `data/cookie.txt`（一行，不要引号）
 
 要求含 `MUSIC_U=...`。
+
+### YouTube 下载与 Cookie
+
+`yt-dlp` 的 YouTube 流会因视频、出口网络、登录态和客户端类型不同而变化。工具不会固定只使用某一种客户端，而是按以下流程选择：
+
+1. 使用已配置的 YouTube Cookie 搜索候选；搜索失败且存在 Cookie 时，再用匿名模式搜索。
+2. 对选中的视频分别执行匿名/Cookie 两次格式探测。
+3. 只接受带直链的音频-only 格式（无视频轨），优先级为 `m4a` > `mp4` > `aac`；同一格式优先普通 HTTP/HTTPS 直链和较高码率，完全相同则优先 Cookie 模式。
+4. 下载指定的格式 ID；如果该模式下载失败，会按探测结果尝试另一模式，最后再交给后续下载源。
+
+因此，Cookie 模式可用格式少于匿名模式时，程序仍可能选择匿名模式的 `m4a`；Cookie 不会强行套用到不支持 Cookie 的客户端。日志中会记录 `mode=anonymous/cookie`、格式 ID 和码率，便于排查 403/503。
+
+YouTube Cookie 文件必须是 Netscape/Mozilla 格式（通常由已登录的普通浏览器配置导出），不要使用无痕窗口临时会话或把 Cookie 粘贴到公开位置。状态页的“验证 YouTube Cookie”会访问需要登录的历史记录页，并返回三种状态：
+
+- **有效**：探测成功；
+- **明确失效**：检测到登录态失效或需要登录；
+- **暂时无法判断**：网络 403/429、机器人验证、PO Token 或超时等情况。此状态不等同于 Cookie 已失效。
 
 ### 获取歌单 ID
 
@@ -162,6 +184,9 @@ docker compose exec navidrome-sync python -m app.main --run-now
 # 看日志
 docker compose logs -f navidrome-sync
 
+# 查看文件日志（当前日志 + 最近 14 个按天滚动的历史日志）
+ls data/logs
+
 # 修改代码后热重载（无需 rebuild）
 docker compose restart navidrome-sync
 ```
@@ -170,6 +195,7 @@ docker compose restart navidrome-sync
 
 - **网易云 Cookie 无效**：状态页重新扫码登录
 - **YouTube Cookie 无效**：重新导出 Netscape 格式 Cookie；403 或风控错误会显示为“无法判断”，不会直接误报失效
+- **yt-dlp 报 403/503 或没有 m4a**：先看日志中的两次格式探测结果；程序会比较匿名/Cookie 模式，并自动尝试 `m4a`、`mp4`、`aac` 中实际可用的音频格式。两种模式都没有直链时才会切换到 musicdl 后备源
 - **某首歌一直失败**：VIP 曲目且各平台均无免费音源，标记为 `dead`
 - **Navidrome 没扫到新文件**：确认 `Scanner.WatcherWait` 未被关闭
 
@@ -181,6 +207,8 @@ docker compose restart navidrome-sync
                 │                    Docker 容器
                 │                    (moefurina/ncm-api)
                 ↓
+          yt-dlp（匿名/Cookie 双模式格式探测）
+             └──→ YouTube 音频直链（m4a/mp4/aac）
           musicdl 多源下载链 ──→ 网易云/酷我/咪咕/波点/QQ
 ```
 
