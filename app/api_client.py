@@ -5,10 +5,22 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
+import random
+import string
 import time
 
 import requests
+
+try:
+    from Crypto.Cipher import AES, PKCS1_v1_5
+    from Crypto.PublicKey import RSA
+    from Crypto.Util.Padding import pad
+    _HAS_CRYPTO = True
+except ImportError:  # pycryptodome 缺失时仍可用 ncm-api 回传路径
+    _HAS_CRYPTO = False
 
 log = logging.getLogger(__name__)
 
@@ -16,6 +28,37 @@ TIMEOUT = 25
 _TRANSIENT_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 _REQUEST_RETRY_ATTEMPTS = 2
 _REQUEST_RETRY_DELAY = 2.0
+
+# ---- weapi 加密常量（对齐 NeteaseCloudMusicApi util/crypto.js）----
+_WEAPI_PRESET_KEY = "0CoJUm6Qyw8Z8juo"
+_WEAPI_IV = "0102030405060708"
+_WEAPI_BASE62 = (string.ascii_lowercase + string.ascii_uppercase + string.digits)
+_WEAPI_PUBLIC_KEY = (
+    "-----BEGIN PUBLIC KEY-----\n"
+    "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDgqQn2JZ34ZC28NWYpAUd98iZ37BUrX/aKzmFbt7clFSs6sXqHauqKWqdtLkF2KexO40H1YTX8z2lSgBBOAxLsvaklV8k4cBFK9snQXE9/DDaFt6Rr7iVZMldczhC0JNgTz+SHXT6CBHuX3e9SdB1Ua44oncaTWz7OBGLbCiK45wIDAQAB\n"
+    "-----END PUBLIC KEY-----\n"
+)
+_MUSIC_HOST = "https://music.163.com"
+
+
+def _weapi_encrypt(data: dict) -> dict:
+    """weapi 加密，返回 {param, encSecKey}。
+
+    双层 AES-CBC：内层用固定 preset key，外层用随机 16 位 secret key；
+    secret key 反转后用固定 RSA 公钥加密得到 encSecKey。
+    """
+    text = json.dumps(data, separators=(",", ":"))
+    secret_key = "".join(random.choice(_WEAPI_BASE62) for _ in range(16))
+
+    def _aes_b64(plain: str, key: str) -> str:
+        cipher = AES.new(key.encode("utf-8"), AES.MODE_CBC, _WEAPI_IV.encode("utf-8"))
+        enc = cipher.encrypt(pad(plain.encode("utf-8"), 16))
+        return base64.b64encode(enc).decode("ascii")
+
+    param = _aes_b64(_aes_b64(text, _WEAPI_PRESET_KEY), secret_key)
+    pub = RSA.import_key(_WEAPI_PUBLIC_KEY)
+    enc_sec = PKCS1_v1_5.new(pub).encrypt(secret_key[::-1].encode("utf-8"))
+    return {"param": param, "encSecKey": enc_sec.hex().upper()}
 
 
 class NCMAPIClient:
@@ -208,6 +251,51 @@ class NCMAPIClient:
     # ------- 听歌打卡 -------
 
     def scrobble(self, song_id: int, time_ms: int = 180000) -> bool:
-        """写入听歌记录（最近播放 + 听歌排行计数）。"""
+        """写入听歌记录（最近播放 + 听歌排行计数）。
+
+        优先直连 music.163.com 的 /api/feedback/weblog（weapi），绕开
+        ncm-api 转发的 clientlog3.music.163.com（后者常被 403/TLS 拒连）。
+        无 Cookie 或 pycryptodome 缺失时回退到 ncm-api /scrobble。
+        """
+        if self._cookie and _HAS_CRYPTO:
+            try:
+                if self._scrobble_direct(song_id, time_ms):
+                    return True
+            except requests.exceptions.RequestException as e:
+                log.debug("直连 scrobble 失败，回退 ncm-api: %s", type(e).__name__)
+        return self._scrobble_via_ncm(song_id, time_ms)
+
+    def _scrobble_direct(self, song_id: int, time_ms: int) -> bool:
+        """直连 music.163.com/api/feedback/weblog（weapi 加密）。"""
+        body = {
+            "logs": json.dumps([{
+                "action": "play",
+                "json": {
+                    "download": 0,
+                    "end": "playend",
+                    "id": song_id,
+                    "sourceId": song_id,
+                    "time": time_ms,
+                    "type": "song",
+                    "wifi": 0,
+                    "source": "list",
+                    "mainSite": 1,
+                    "content": "",
+                },
+            }], ensure_ascii=False),
+        }
+        payload = _weapi_encrypt(body)
+        r = self.session.post(
+            f"{_MUSIC_HOST}/api/feedback/weblog",
+            data=payload,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": _MUSIC_HOST + "/",
+                     "Cookie": self._cookie},
+            timeout=TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.json().get("code") == 200
+
+    def _scrobble_via_ncm(self, song_id: int, time_ms: int) -> bool:
+        """经 ncm-api 回传（保留原重试逻辑，作为直连兜底）。"""
         j = self._get_retry("/scrobble", id=song_id, sourceid=song_id, time=time_ms)
         return j.get("code") == 200

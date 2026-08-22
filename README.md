@@ -29,7 +29,7 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
 - **自动匹配校验**：归一化（含繁简转换）+ 模糊比对（标题/歌手/时长），避免 Cover 版误下
 - **完整元数据**：内嵌 ID3/FLAC/M4A 标签、封面、歌词，写 `.lrc` 旁挂文件
 - **查重不重复**：调用 Navidrome 的 Subsonic `search3` 接口检测曲库已有曲目
-- **听歌回传**：每日自动将 ListenBrainz 的新播放记录回传到网易云（听歌排行 + 最近播放）
+- **听歌回传**：每日自动将 ListenBrainz 的新播放记录回传到网易云（听歌排行 + 最近播放）；weapi 直连 `music.163.com`，绕开 ncm-api 的 `clientlog3` 日志域名
 - **失败重试队列**：匹配/下载失败自动入队，按退避策略每日重试
 - **轻量状态页**：Cookie 健康、统计、运行历史、失败队列，可暂停刷新、中止任务、逐条重试
 - **滚动日志**：日志按天午夜滚动，保留最近 14 个历史文件
@@ -196,7 +196,7 @@ docker compose restart navidrome-sync
 
 - **网易云 Cookie 无效**：状态页重新扫码登录
 - **旧推荐歌单**：每天任务完成后自动清理超过 `playlist_retention_days` 的网易云日推、ListenBrainz CF 和 Last.fm 推荐 `.m3u8`；固定歌单和音频文件不会删除
-- **网易云听歌回传全部失败（502/405）**：Cookie 校验成功不代表 `/scrobble` 上游可用；回传已按 2 秒限速并对临时 502/频控响应自动重试。若仍持续失败，检查 ncm-api 容器的 `HTTP_PROXY/HTTPS_PROXY` 等代理环境变量，以及容器到网易云的 TLS 连接
+- **网易云听歌回传全部失败（502/405/403）**：Cookie 校验成功不代表 `/scrobble` 上游可用。回传**优先直连 `music.163.com/api/feedback/weblog`（weapi 加密）**，绕开 ncm-api 转发的 `clientlog3.music.163.com`（该日志域名常被 403/TLS 拒连，是 NAS 上回传全挂的常见根因）；仅当无 Cookie 或 pycryptodome 缺失时才回退到 ncm-api `/scrobble`。回传已按 2 秒限速并对临时 502/频控响应自动重试。若直连仍失败，检查容器到 `music.163.com` 的出站网络；若走 ncm-api 兜底，再检查其 `HTTP_PROXY/HTTPS_PROXY` 代理与 TLS 连接
 - **YouTube Cookie 无效**：重新导出 Netscape 格式 Cookie；403 或风控错误会显示为“无法判断”，不会直接误报失效
 - **yt-dlp 报 403/503 或没有 m4a**：先看日志中的两次格式探测结果；程序会比较匿名/Cookie 模式，并自动尝试 `m4a`、`mp4`、`aac` 中实际可用的音频格式。两种模式都没有直链时才会切换到 musicdl 后备源
 - **某首歌一直失败**：VIP 曲目且各平台均无免费音源，标记为 `dead`
@@ -209,6 +209,7 @@ docker compose restart navidrome-sync
                 │                         ↑
                 │                    Docker 容器
                 │                    (moefurina/ncm-api)
+                ├──→ weapi 直连 ──→ music.163.com/api/feedback/weblog（听歌回传，优先）
                 ↓
           yt-dlp（匿名/Cookie 双模式格式探测）
              └──→ YouTube 音频直链（m4a/mp4/aac）

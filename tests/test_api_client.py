@@ -1,11 +1,12 @@
 """NCMAPIClient 分批/分页接口测试。"""
 
+import base64
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.api_client import NCMAPIClient
+from app.api_client import NCMAPIClient, _weapi_encrypt
 
 
 def _client(handler) -> NCMAPIClient:
@@ -91,3 +92,71 @@ def test_search_retries_rate_limit_405(monkeypatch):
     monkeypatch.setattr("app.api_client.time.sleep", lambda _: None)
     assert c.search("晴天", limit=5)[0]["id"] == 1
     assert calls == ["/cloudsearch", "/cloudsearch"]
+
+
+# ---- weapi 直连 scrobble ----
+
+def test_weapi_encrypt_structure():
+    out = _weapi_encrypt({"logs": "x"})
+    # param 是 base64（双层 AES 输出）
+    base64.b64decode(out["param"], validate=True)
+    # encSecKey 是 RSA-1024 → 128 字节 hex → 256 字符大写
+    assert len(out["encSecKey"]) == 256
+    assert out["encSecKey"] == out["encSecKey"].upper()
+    int(out["encSecKey"], 16)  # 合法十六进制
+
+
+def test_scrobble_direct_posts_music163():
+    import app.api_client as m
+    calls = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"code": 200}
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        calls["url"] = url
+        calls["data"] = data
+        calls["headers"] = headers
+        return _Resp()
+
+    c = NCMAPIClient("http://mock")
+    c._cookie = "MUSIC_U=abc"
+    c.session.post = fake_post
+    assert c._scrobble_direct(123, 180000) is True
+    assert calls["url"] == "https://music.163.com/api/feedback/weblog"
+    assert calls["headers"]["Cookie"] == "MUSIC_U=abc"
+    assert set(calls["data"]) == {"param", "encSecKey"}
+    base64.b64decode(calls["data"]["param"], validate=True)  # param 为合法 base64 密文
+
+
+def test_scrobble_prefers_direct_when_cookie_set():
+    c = NCMAPIClient("http://mock")
+    c._cookie = "MUSIC_U=abc"
+    direct = []
+
+    def fake_direct(song_id, time_ms):
+        direct.append(song_id)
+        return True
+
+    c._scrobble_direct = fake_direct
+    c._scrobble_via_ncm = lambda sid, t: (_ for _ in ()).throw(AssertionError("ncm 不应被调用"))
+    assert c.scrobble(456) is True
+    assert direct == [456]
+
+
+def test_scrobble_falls_back_to_ncm_without_cookie():
+    c = NCMAPIClient("http://mock")
+    # 无 Cookie → 直连被跳过，走 ncm-api 路径
+    ncm = []
+
+    def fake_get(path, **params):
+        ncm.append(path)
+        return {"code": 200}
+
+    c._get = fake_get
+    assert c.scrobble(456) is True
+    assert ncm == ["/scrobble"]
