@@ -253,6 +253,9 @@ class MusicDLEngine:
         command = [sys.executable, "-m", "yt_dlp"]
         if suppress_warnings:
             command.append("--no-warnings")
+        command.append("--no-update")
+        # yt-dlp 2026.08+ 需要 EJS 远程挑战求解器，否则签名校验失败、格式列表残缺
+        command += ["--remote-components", "ejs:github"]
         return subprocess.run(
             [*command, *args],
             capture_output=True, text=True, timeout=timeout,
@@ -453,6 +456,7 @@ class MusicDLEngine:
         if self.ytdlp_cookies and self.ytdlp_cookies.exists():
             modes.append(True)
         variants = []
+        cookie_probe_failed = False
         for use_cookies in modes:
             probe = self._probe_ytdlp_formats(vid, use_cookies)
             fmt = probe.get("format")
@@ -462,9 +466,19 @@ class MusicDLEngine:
                          vid, "cookie" if use_cookies else "anonymous",
                          fmt["format_id"], fmt["abr"])
             else:
+                if use_cookies:
+                    cookie_probe_failed = True
                 log.info("yt-dlp 格式探测 %s: mode=%s, 无可用音频格式%s",
                          vid, "cookie" if use_cookies else "anonymous",
                          f" ({probe['error'][:120]})" if probe.get("error") else "")
+        if cookie_probe_failed:
+            # Cookie 模式探测不到可用格式通常意味着 Cookie 已失效或账号被风控
+            # （被风控账号带 Cookie 访问时返回的格式列表反而更差）。此时匿名
+            # 下载大概率 403，与其白烧一次请求、污染 403 熔断计数，不如直接
+            # 判定 ytdlp 源本次不可用，交给后续下载源。
+            log.warning("yt-dlp Cookie 模式无可用音频格式，跳过匿名回退"
+                        "（疑似 Cookie 失效或账号被风控）: %s", query)
+            return None
         # m4a > mp4 > aac；同等格式优先 Cookie 模式，以降低匿名 503 的影响。
         variants.sort(key=lambda v: (
             {"m4a": 3, "mp4": 2, "aac": 1}.get(v["ext"], 0),
@@ -472,7 +486,7 @@ class MusicDLEngine:
             int(v["use_cookies"]),
         ), reverse=True)
         if not variants:
-            log.warning("yt-dlp 两种模式都没有可用音频格式: %s", query)
+            log.warning("yt-dlp 无可用音频格式: %s", query)
             return None
 
         for variant in variants:

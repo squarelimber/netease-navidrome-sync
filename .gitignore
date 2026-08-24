@@ -21,3 +21,6 @@ tmp_dl/
 # 系统
 .DS_Store
 Thumbs.db
+
+# AI 会话工作区
+.workbuddy/

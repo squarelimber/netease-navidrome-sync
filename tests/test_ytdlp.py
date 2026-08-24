@@ -176,6 +176,36 @@ def test_download_chooses_mode_with_m4a(tmp_path, monkeypatch):
     assert download_calls and download_calls[0][1]["use_cookies"] is True
 
 
+def test_cookie_probe_failed_skips_anonymous_fallback(tmp_path, monkeypatch):
+    """Cookie 模式探测无可用音频格式时，不再回退匿名下载（匿名必然 403）。"""
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    e = MusicDLEngine(["ytdlp"], tmp_path / "work", ytdlp_cookies=cookie)
+    calls = []
+
+    def fake_run(args, timeout=240, **kwargs):
+        calls.append((args, kwargs))
+        if "ytsearch" in " ".join(args):
+            return _FakeProc(0, json.dumps({"entries": [
+                {"id": "VIDEO3", "title": "周杰伦 - 晴天", "duration": 260},
+            ]}), "")
+        if "-J" in args:
+            if kwargs.get("use_cookies"):
+                # Cookie 模式：无可用音频格式（Cookie 失效/账号被风控的典型现象）
+                return _FakeProc(0, json.dumps({"formats": []}), "")
+            return _FakeProc(0, json.dumps({"formats": [{
+                "format_id": "140", "ext": "m4a", "vcodec": "none",
+                "acodec": "mp4a.40.2", "abr": 129, "protocol": "https",
+                "url": "https://example.test/audio",
+            }]}), "")
+        return _FakeProc(1, "", "boom")
+
+    monkeypatch.setattr(MusicDLEngine, "_run_ytdlp", staticmethod(fake_run))
+    path = e._download_ytdlp(_track())
+    assert path is None
+    assert not any("-f" in c[0] for c in calls), "不应再发起匿名下载"
+
+
 def test_engine_chain_uses_ytdlp(tmp_path, monkeypatch):
     e = MusicDLEngine(["netease", "ytdlp"], tmp_path / "w")
     fake_path = tmp_path / "w" / "x.mp3"
