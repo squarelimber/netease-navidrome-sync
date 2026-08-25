@@ -563,26 +563,35 @@ function showConfig() {
     </div>`;
   showModal(html);
   document.getElementById('cfg-st').textContent = '加载中…';
-  fetch('/api/config').then(r=>r.json()).then(r => {
-    if (!r.ok) { document.getElementById('cfg-st').textContent = '加载失败: '+(r.msg||''); return; }
-    const y = r.data || {};
-    const srcs = ['ytdlp','netease','kuwo','migu','bodian','qq','kugou','qianqian'];
-    document.getElementById('c-dl-srcs').innerHTML = srcs.map(s =>
-      `<label class="cfg-cb"><input type="checkbox" value="${s}" ${(y.download?.sources||[]).includes(s)?'checked':''}> ${s}</label>`
-    ).join('');
-    setVal('c-nav-url', y.navidrome?.url); setVal('c-nav-user', y.navidrome?.username); setVal('c-nav-pass', y.navidrome?.password);
-    setCb('c-lb-en', y.sources?.listenbrainz?.enabled);
-    setVal('c-lb-un', y.sources?.listenbrainz?.username);
-    cfgToggle('c-lb-un');
-    setCb('c-lf-en', y.sources?.lastfm?.enabled);
-    setVal('c-lf-k', y.sources?.lastfm?.api_key); setVal('c-lf-u', y.sources?.lastfm?.username);
-    cfgToggle('c-lf-k'); cfgToggle('c-lf-u');
-    setCb('c-dd-en', y.sources?.netease_daily?.enabled); setCb('c-pl-en', y.sources?.netease_playlists?.enabled);
-    setVal('c-th', y.download?.title_threshold); setVal('c-dur', y.download?.max_duration_diff);
-    setVal('c-int', y.download?.interval_seconds); setVal('c-cron', y.schedule?.cron);
-    setVal('c-lim', y.daily_discover_limit);
-    document.getElementById('c-yaml').value = r.raw;
+  fetch('/api/config').then(r => r.json().catch(() => ({ok:false, msg:'HTTP '+r.status+'（响应非 JSON）'}))).then(r => {
+    if (!r.ok) { document.getElementById('cfg-st').textContent = '加载失败: '+(r.msg||r.detail||'未知错误'); return; }
+    const y = (r.data && typeof r.data === 'object') ? r.data : {};
+    // YAML 原文最先填入：即使下面的表单回显抛错，也能看到原始配置内容
+    document.getElementById('c-yaml').value = r.raw || '';
+    try {
+      const srcs = ['ytdlp','netease','kuwo','migu','bodian','qq','kugou','qianqian'];
+      const dlSrcs = Array.isArray(y.download?.sources) ? y.download.sources : [];
+      document.getElementById('c-dl-srcs').innerHTML = srcs.map(s =>
+        `<label class="cfg-cb"><input type="checkbox" value="${s}" ${dlSrcs.includes(s)?'checked':''}> ${s}</label>`
+      ).join('');
+      setVal('c-nav-url', y.navidrome?.url); setVal('c-nav-user', y.navidrome?.username); setVal('c-nav-pass', y.navidrome?.password);
+      setCb('c-lb-en', y.sources?.listenbrainz?.enabled);
+      setVal('c-lb-un', y.sources?.listenbrainz?.username);
+      cfgToggle('c-lb-un');
+      setCb('c-lf-en', y.sources?.lastfm?.enabled);
+      setVal('c-lf-k', y.sources?.lastfm?.api_key); setVal('c-lf-u', y.sources?.lastfm?.username);
+      cfgToggle('c-lf-k'); cfgToggle('c-lf-u');
+      setCb('c-dd-en', y.sources?.netease_daily?.enabled); setCb('c-pl-en', y.sources?.netease_playlists?.enabled);
+      setVal('c-th', y.download?.title_threshold); setVal('c-dur', y.download?.max_duration_diff);
+      setVal('c-int', y.download?.interval_seconds); setVal('c-cron', y.schedule?.cron);
+      setVal('c-lim', y.daily_discover_limit);
+    } catch (e) {
+      document.getElementById('cfg-st').textContent = '表单回显失败: '+e;
+      return;
+    }
     document.getElementById('cfg-st').textContent = '';
+  }).catch(e => {
+    document.getElementById('cfg-st').textContent = '加载失败: '+e;
   });
 }
 function cfgToggle(id) { document.getElementById(id).disabled = !document.getElementById(id.replace('-k','-en').replace('-u','-en')).checked; }
@@ -747,7 +756,15 @@ def create_app(cfg, db, jobs, scheduler=None):
         try:
             raw_text = cfg._path.read_text(encoding="utf-8")
             data = yaml.safe_load(raw_text)
-            return {"ok": True, "raw": raw_text, "data": data if isinstance(data, dict) else {}}
+            if not isinstance(data, dict):
+                data = {}
+            # yaml 可能解析出 datetime.date 等非 JSON 类型，统一转字符串，
+            # 避免 JSON 序列化抛错导致 500、前端卡在"加载中"。
+            try:
+                data = json.loads(json.dumps(data, default=str, ensure_ascii=False))
+            except Exception:
+                data = {}
+            return {"ok": True, "raw": raw_text, "data": data}
         except Exception as e:
             return {"ok": False, "msg": str(e)}
 
