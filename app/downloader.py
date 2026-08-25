@@ -44,6 +44,11 @@ YTDLP_SOURCE = "ytdlp"
 
 VALID_SOURCES = set(SOURCE_CLIENTS) | {YTDLP_SOURCE}
 
+# 可入库音频格式白名单（Navidrome 能识别、本流程可正常消费）。
+# 源方私有/加密格式（酷我/QQ 的 .mflac、.kwm、.mgg、.ncm 等）一律拒收：
+# 既无法通过 Navidrome 的扩展名白名单入库，任何播放器也无法直接播放。
+LIBRARY_AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".mp4", ".aac", ".ogg", ".opus", ".wav"}
+
 # yt-dlp 搜索候选数 / 单曲下载超时
 _YTDLP_SEARCH_COUNT = 5
 _YTDLP_TIMEOUT = 240
@@ -214,6 +219,13 @@ class MusicDLEngine:
         save_path = Path(downloaded[0].save_path)
         if not save_path.exists() or save_path.stat().st_size < 100 * 1024:
             log.warning("源 %s 下载文件无效: %s", source, save_path)
+            return None
+        if save_path.suffix.lower() not in LIBRARY_AUDIO_EXTENSIONS:
+            # 酷我"臻品音质"等私有加密格式（.mflac 等）：拒收并落下一源，
+            # 避免加密文件入库后 Navidrome 扫不到、歌单出现幽灵条目。
+            log.warning("源 %s 返回非入库格式 %s（私有/加密音频），跳过: %s",
+                        source, save_path.suffix, save_path.name)
+            save_path.unlink(missing_ok=True)
             return None
         return save_path
 
@@ -519,6 +531,11 @@ class MusicDLEngine:
             save_path = max(files, key=lambda p: p.stat().st_size)
             if save_path.stat().st_size < 100 * 1024:
                 log.warning("yt-dlp 下载文件无效: %s", save_path)
+                continue
+            if save_path.suffix.lower() not in LIBRARY_AUDIO_EXTENSIONS:
+                log.warning("yt-dlp 产物非入库格式 %s，跳过: %s",
+                            save_path.suffix, save_path.name)
+                save_path.unlink(missing_ok=True)
                 continue
             return save_path
         return None
