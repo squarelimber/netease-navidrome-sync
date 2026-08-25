@@ -43,8 +43,9 @@ sources:
     api_key: ""
     username: ""
 
-# 每日最多新增的"推荐类"曲目数（歌单同步不受此限制）
-discover_daily_limit: 40
+# 每日发现歌单（ListenBrainz 每周歌单/CF + Last.fm 等合并）每天最多收取的曲目数；
+# 网易云日推不限额、全部进自己的日推歌单，歌单同步也不受此限制
+daily_discover_limit: 10
 
 # 自动推荐歌单保留的最近天数（包含今天；只删除旧 .m3u8 和数据库歌单关联，不删除音频）
 playlist_retention_days: 3

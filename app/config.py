@@ -39,7 +39,7 @@ class Config:
     netease_cookie: str
     cookie_file: Path
     sources: dict  # name -> SourceCfg
-    discover_daily_limit: int
+    daily_discover_limit: int
     playlist_retention_days: int
     dl_sources: list
     ytdlp_cookies_file: Path
@@ -111,7 +111,9 @@ def load() -> Config:
         netease_cookie=cookie,
         cookie_file=cookie_file,
         sources=sources,
-        discover_daily_limit=int(raw.get("discover_daily_limit", 40)),
+        # 兼容旧配置名 discover_daily_limit（已更名：只限"每日发现"歌单，日推不限额）
+        daily_discover_limit=int(raw.get("daily_discover_limit",
+                                         raw.get("discover_daily_limit", 10))),
         playlist_retention_days=max(1, int(raw.get("playlist_retention_days", 3))),
         dl_sources=list(dl.get("sources", ["ytdlp", "netease", "kuwo", "migu", "bodian", "qq"])),
         ytdlp_cookies_file=Path(dl.get("ytdlp_cookies_file", data_dir / "yt_cookies.txt")),

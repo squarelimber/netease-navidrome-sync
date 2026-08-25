@@ -19,7 +19,7 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
 
 ## 功能
 
-- **三源推荐聚合**：网易云每日推荐（30 首/天）、ListenBrainz 协同过滤 + 官方每周歌单、Last.fm 常听/最爱的相似曲目
+- **三源推荐聚合**：网易云每日推荐（30 首/天，全部进 `网易云日推-{日期}` 歌单）；ListenBrainz 每周歌单/CF 与 Last.fm 常听/最爱相似曲目合并进 `每日发现-{日期}` 歌单，按分数每天收取 `daily_discover_limit` 首（默认 10，已收过的曲目自动剔除、不占名额）
 - **指定网易云歌单同步**：持续同步"我喜欢的音乐"等歌单到 Navidrome
 - **多源下载链**：基于 [musicdl](https://github.com/CharlesPikachu/musicdl) 的多平台下载（网易云→酷我→咪咕→波点→QQ），单源失败自动降级；`ytdlp` YouTube 源默认置于源链首位，各平台无源时仍可继续尝试
 - **YouTube 双模式格式探测**：对同一候选视频分别探测匿名模式和 Cookie 模式的可用格式，优先选择可直接入库的 `m4a`，其次 `mp4`/`aac`；下载失败会尝试另一种模式
@@ -96,7 +96,7 @@ docker compose up -d --build
 | `sources.lastfm` | Last.fm API Key + 用户名 |
 | `download.sources` | 下载源链顺序，默认 `ytdlp` 优先（YouTube 兼容性好，优先直取音频格式，无需 ffmpeg），musicdl 各源作后备 |
 | `download.ytdlp_cookies_file` | YouTube Cookie 文件路径（Netscape 格式）；存在时会与匿名模式并行探测格式，状态页可手动验证 |
-| `discover_daily_limit` | 每日新增推荐曲上限 |
+| `daily_discover_limit` | 每日发现歌单每天收取上限（默认 10）；网易云日推与歌单同步不受限制 |
 | `playlist_retention_days` | 自动推荐歌单保留天数，默认 3 天（包含今天）；只删除旧 `.m3u8` 和数据库关联，不删除音频文件 |
 | `schedule.cron` | 每日任务时间，默认 `30 4 * * *` |
 | `web.port` | 状态页端口，默认 8678 |
@@ -155,7 +155,8 @@ music/
 ├── Discover/                      # 推荐曲目 + 手动搜索下载
 │   ├── 歌手 - 歌名.mp3
 │   ├── 歌手 - 歌名.lrc
-│   └── 网易云日推-2026-07-20.m3u8
+│   ├── 网易云日推-2026-07-20.m3u8
+│   └── 每日发现-2026-07-20.m3u8
 └── NetEase/
     └── 歌单名/                     # 同步的网易云歌单
         ├── 歌手 - 歌名.mp3
@@ -195,7 +196,7 @@ docker compose restart navidrome-sync
 常见问题：
 
 - **网易云 Cookie 无效**：状态页重新扫码登录
-- **旧推荐歌单**：每天任务完成后自动清理超过 `playlist_retention_days` 的网易云日推、ListenBrainz CF 和 Last.fm 推荐 `.m3u8`；固定歌单和音频文件不会删除
+- **旧推荐歌单**：每天任务完成后自动清理超过 `playlist_retention_days` 的网易云日推、每日发现 `.m3u8`（以及 Navidrome 里自动导入的对应歌单）；固定歌单和音频文件不会删除
 - **网易云听歌回传全部失败（502/405/403）**：Cookie 校验成功不代表 `/scrobble` 上游可用。回传**优先直连 `music.163.com/api/feedback/weblog`（weapi 加密）**，绕开 ncm-api 转发的 `clientlog3.music.163.com`（该日志域名常被 403/TLS 拒连，是 NAS 上回传全挂的常见根因）；仅当无 Cookie 或 pycryptodome 缺失时才回退到 ncm-api `/scrobble`。回传已按 2 秒限速并对临时 502/频控响应自动重试。若直连仍失败，检查容器到 `music.163.com` 的出站网络；若走 ncm-api 兜底，再检查其 `HTTP_PROXY/HTTPS_PROXY` 代理与 TLS 连接
 - **YouTube Cookie 无效**：重新导出 Netscape 格式 Cookie；403 或风控错误会显示为“无法判断”，不会直接误报失效
 - **yt-dlp 报 403/503 或没有 m4a**：先看日志中的两次格式探测结果；程序会比较匿名/Cookie 模式，并自动尝试 `m4a`、`mp4`、`aac` 中实际可用的音频格式。两种模式都没有直链时才会切换到 musicdl 后备源

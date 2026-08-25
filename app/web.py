@@ -9,6 +9,8 @@ import logging
 import threading
 import time
 
+import yaml
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -538,6 +540,10 @@ function showConfig() {
       <label class="cfg-cb"><input type="checkbox" id="c-dd-en"> 网易云日推</label>
       <label class="cfg-cb"><input type="checkbox" id="c-pl-en"> 网易云歌单同步</label>
     </div>
+    <div class="cfg-row">
+      <div class="cfg-group"><label>每日发现限额（LB+LastFM 合并歌单，日推不受限）</label>
+        <input id="c-lim" class="input" style="width:90px" type="number" min="1"></div>
+    </div>
     <div class="cfg-sep">下载</div>
     <div class="cfg-row" style="flex-wrap:wrap" id="c-dl-srcs"></div>
     <div class="cfg-row">
@@ -557,39 +563,31 @@ function showConfig() {
     </div>`;
   showModal(html);
   document.getElementById('cfg-st').textContent = '加载中…';
-  fetch('/api/config').then(r=>r.text()).then(t => {
-    const y = parseYaml(t);
+  fetch('/api/config').then(r=>r.json()).then(r => {
+    if (!r.ok) { document.getElementById('cfg-st').textContent = '加载失败: '+(r.msg||''); return; }
+    const y = r.data || {};
+    const srcs = ['ytdlp','netease','kuwo','migu','bodian','qq','kugou','qianqian'];
+    document.getElementById('c-dl-srcs').innerHTML = srcs.map(s =>
+      `<label class="cfg-cb"><input type="checkbox" value="${s}" ${(y.download?.sources||[]).includes(s)?'checked':''}> ${s}</label>`
+    ).join('');
     setVal('c-nav-url', y.navidrome?.url); setVal('c-nav-user', y.navidrome?.username); setVal('c-nav-pass', y.navidrome?.password);
     setCb('c-lb-en', y.sources?.listenbrainz?.enabled);
     setVal('c-lb-un', y.sources?.listenbrainz?.username);
+    cfgToggle('c-lb-un');
     setCb('c-lf-en', y.sources?.lastfm?.enabled);
     setVal('c-lf-k', y.sources?.lastfm?.api_key); setVal('c-lf-u', y.sources?.lastfm?.username);
+    cfgToggle('c-lf-k'); cfgToggle('c-lf-u');
     setCb('c-dd-en', y.sources?.netease_daily?.enabled); setCb('c-pl-en', y.sources?.netease_playlists?.enabled);
-    const srcs = ['ytdlp','netease','kuwo','migu','bodian','qq'];
-    const act = (y.download?.sources || []);
-    document.getElementById('c-dl-srcs').innerHTML = srcs.map(s =>
-      `<label class="cfg-cb"><input type="checkbox" value="${s}" ${act.includes(s)?'checked':''}> ${s}</label>`
-    ).join('');
     setVal('c-th', y.download?.title_threshold); setVal('c-dur', y.download?.max_duration_diff);
     setVal('c-int', y.download?.interval_seconds); setVal('c-cron', y.schedule?.cron);
-    document.getElementById('c-yaml').value = t;
+    setVal('c-lim', y.daily_discover_limit);
+    document.getElementById('c-yaml').value = r.raw;
     document.getElementById('cfg-st').textContent = '';
   });
 }
 function cfgToggle(id) { document.getElementById(id).disabled = !document.getElementById(id.replace('-k','-en').replace('-u','-en')).checked; }
 function setVal(id, v) { const e=document.getElementById(id); if(e && v!==undefined) e.value=v; }
 function setCb(id, v) { const e=document.getElementById(id); if(e) e.checked=!!v; }
-function parseYaml(t) {
-  const o={}; let sec=null;
-  t.split('\\n').forEach(l => {
-    const m = l.match(/^(\\S[^:]*):/); if(m) sec=m[1];
-    if(sec && l.match(/^\\s+(\\w+):\\s*(.*)/)) { const k=RegExp.$1,v=RegExp.$2; o[sec]||(o[sec]={}); o[sec][k]=v.replace(/^['"]|['"]$/g,''); }
-    if(!l.trim().startsWith('#')&&l.includes(': ')) {
-      const parts=l.split(': '); if(parts.length==2&&!l.startsWith(' ')) o[parts[0]]=parts[1].replace(/^['"]|['"]$/g,'');
-    }
-  });
-  return o;
-}
 async function saveConfig() {
   const g = id => document.getElementById(id);
   const v = id => g(id)?.value||'';
@@ -605,6 +603,7 @@ async function saveConfig() {
     },
     download: {sources: srcs, interval_seconds: parseFloat(v('c-int'))||2,
                title_threshold: parseInt(v('c-th'))||85, max_duration_diff: parseInt(v('c-dur'))||12},
+    daily_discover_limit: Math.max(1, parseInt(v('c-lim'))||10),
     schedule: {cron: v('c-cron')||'30 4 * * *'},
   };
   const r = await (await fetch('/api/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})).json();
@@ -741,8 +740,14 @@ def create_app(cfg, db, jobs, scheduler=None):
 
     @app.get("/api/config")
     def get_config():
+        """返回已解析的配置（raw=原始 YAML 文本），供设置页回显。
+
+        不能用 JSONResponse 包原始文本：会被整体 JSON 转义成一行，
+        前端无法按行解析。"""
         try:
-            return JSONResponse(content=cfg._path.read_text(encoding="utf-8"))
+            raw_text = cfg._path.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw_text)
+            return {"ok": True, "raw": raw_text, "data": data if isinstance(data, dict) else {}}
         except Exception as e:
             return {"ok": False, "msg": str(e)}
 
@@ -769,7 +774,7 @@ def create_app(cfg, db, jobs, scheduler=None):
             from . import config as config_mod
             new_cfg = config_mod.load()
             old_ytdlp_cookie_file = cfg.ytdlp_cookies_file
-            for at in ("music_dir","data_dir","ncm_api_url","cron","discover_daily_limit",
+            for at in ("music_dir","data_dir","ncm_api_url","cron","daily_discover_limit",
                        "playlist_retention_days",
                        "dl_sources","dl_interval","ytdlp_cookies_file",
                        "title_threshold","max_duration_diff","run_on_startup",

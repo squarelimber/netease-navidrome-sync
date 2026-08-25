@@ -27,8 +27,12 @@ from .util import RateLimiter, safe_name, track_key
 log = logging.getLogger(__name__)
 
 DISCOVER_DIR = "Discover"
+# 每日发现歌单：合并 ListenBrainz（每周歌单/CF）与 Last.fm 等推荐源，按分数限额收取
+DAILY_DISCOVER_NAME = "每日发现"
 _AUTO_PLAYLIST_PATTERNS = (
     re.compile(r"^网易云日推-(\d{4}-\d{2}-\d{2})$"),
+    re.compile(r"^每日发现-(\d{4}-\d{2}-\d{2})$"),
+    # 旧版独立推荐歌单（合并进"每日发现"之前的命名），保留以清理历史残留
     re.compile(r"^ListenBrainz-CF-(\d{4}-\d{2}-\d{2})$"),
     re.compile(r"^LastFM-推荐-(\d{4}-\d{2}-\d{2})$"),
 )
@@ -296,7 +300,7 @@ class Jobs:
                 log.error("生成歌单文件失败 %s: %s", playlist, e)
 
     def _cleanup_old_playlists(self):
-        """删除过期的自动推荐歌单文件和数据库关联，保留音频文件。"""
+        """删除过期的自动推荐歌单（Navidrome API + 本地文件 + 数据库关联），保留音频文件。"""
         retention = max(1, int(getattr(self.cfg, "playlist_retention_days", 3)))
         cutoff = datetime.date.today() - datetime.timedelta(days=retention - 1)
         discover_dir = self.cfg.music_dir / DISCOVER_DIR
@@ -307,24 +311,79 @@ class Jobs:
             playlist_date = _automatic_playlist_date(name)
             if playlist_date and playlist_date < cutoff:
                 candidates.add(name)
+        # Discover/ 顶层的 m3u8 都是自动歌单（含旧版 LB 每周歌单等无法按名识别的），按文件时间清理
         if discover_dir.exists():
             for path in discover_dir.glob("*.m3u8"):
-                playlist_date = _automatic_playlist_date(path.stem)
-                if playlist_date and playlist_date < cutoff:
+                try:
+                    file_date = datetime.date.fromtimestamp(path.stat().st_mtime)
+                except OSError:
+                    continue
+                if file_date < cutoff:
                     candidates.add(path.stem)
+        if not candidates:
+            return
 
+        # Navidrome 自动导入的 m3u8 歌单，源文件删除后不会自动消失，需要显式调 API 删掉。
+        navi_deleted = 0
+        if self.subsonic:
+            wanted = {SubsonicClient._norm(name) for name in candidates}
+            for pl in self.subsonic.list_playlists():
+                pid = pl.get("id")
+                if pid and SubsonicClient._norm(pl.get("name", "")) in wanted:
+                    if self.subsonic.delete_playlist(pid):
+                        navi_deleted += 1
+
+        removed_files = 0
         for playlist in sorted(candidates):
             self.db.delete_playlist(playlist)
-            removed_files = 0
             target = discover_dir / f"{safe_name(playlist)}.m3u8"
             try:
                 if target.exists():
                     target.unlink()
-                    removed_files = 1
+                    removed_files += 1
             except OSError as e:
                 log.warning("删除过期歌单文件失败 %s: %s", target, e)
-            log.info("已清理过期自动歌单 %s（删除 %d 个歌单文件，音频文件保留）",
-                     playlist, removed_files)
+        log.info("已清理过期自动歌单 %d 个（Navidrome 歌单删除 %d，歌单文件删除 %d，音频文件保留）",
+                 len(candidates), navi_deleted, removed_files)
+
+    def _aggregate_discover(self, tracks: list[Track]) -> list[Track]:
+        """聚合推荐源曲目 -> 每日发现歌单。
+
+        规则：
+        - 网易云日推原样保留（全部进自己的日推歌单，不受限额）；
+        - 其余来源（ListenBrainz 每周歌单/CF、Last.fm 等）合并为"每日发现-{today}"，
+          多源重复推荐叠加加分；已收过的曲目（tracks 表 downloaded/existed）剔除，
+          不占当日名额；按分数取前 daily_discover_limit 首（失败过的可再进，走重试）。
+        """
+        today = datetime.date.today().isoformat()
+        daily = [t for t in tracks if t.origin == "netease_daily"]
+        pool = [t for t in tracks if t.origin != "netease_daily"]
+
+        merged: dict[str, Track] = {}
+        for t in pool:
+            k = track_key(t.artists, t.title)
+            if k in merged:
+                old = merged[k]
+                old.score = max(old.score, t.score) + 0.1
+                old.origin = f"{old.origin},{t.origin}" if t.origin not in old.origin else old.origin
+                old.ncm_id = old.ncm_id or t.ncm_id
+            else:
+                merged[k] = t
+
+        known = 0
+        for k, t in list(merged.items()):
+            row = self.db.get_track(k)
+            if row and row["status"] in ("downloaded", "existed"):
+                known += 1
+                del merged[k]
+
+        selected = sorted(merged.values(), key=lambda t: (-t.score, t.title))[: self.cfg.daily_discover_limit]
+        for t in selected:
+            t.playlist = f"{DAILY_DISCOVER_NAME}-{today}"
+
+        log.info("推荐聚合: 日推 %d 首（不限额）；其他源 %d 首去重后 %d，已收过剔除 %d，每日发现取前 %d 首",
+                 len(daily), len(pool), len(merged) + known, known, len(selected))
+        return daily + selected
 
     # ---------- 听歌回传 ----------
 
@@ -477,21 +536,8 @@ class Jobs:
                     pending_sync.append(t)
             log.info("歌单同步: 共 %d 首，新增待处理 %d 首", len(sync_tracks), len(pending_sync))
 
-            # 推荐聚合：按 key 去重合并（取最高分，合并来源）
-            merged = {}
-            for t in discover_tracks:
-                k = track_key(t.artists, t.title)
-                if k in merged:
-                    old = merged[k]
-                    old.score = max(old.score, t.score) + 0.1
-                    old.origin = f"{old.origin},{t.origin}" if t.origin not in old.origin else old.origin
-                    old.ncm_id = old.ncm_id or t.ncm_id
-                else:
-                    merged[k] = t
-            discover_sorted = sorted(merged.values(), key=lambda t: -t.score)
-            capped = discover_sorted[: self.cfg.discover_daily_limit]
-            log.info("推荐聚合: %d 首（去重后 %d，本次处理 %d）",
-                     len(discover_tracks), len(merged), len(capped))
+            # 推荐聚合：日推不限额全收；其余源合并为"每日发现"歌单并按分数限额
+            capped = self._aggregate_discover(discover_tracks)
 
             # 4. 下载处理
             for t in pending_sync + capped:

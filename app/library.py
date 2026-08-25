@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 
 class SubsonicClient:
-    """Navidrome 的 Subsonic API 客户端（仅用于查重）。"""
+    """Navidrome 的 Subsonic API 客户端（查重 + 歌单管理）。"""
 
     def __init__(self, url: str, username: str, password: str):
         self.base = url.rstrip("/") + "/rest"
@@ -59,6 +59,43 @@ class SubsonicClient:
             for s in self.search_songs(query)
         ]
         return matcher.best_match(track, candidates, title_threshold, max_duration_diff) is not None
+
+    @staticmethod
+    def _norm(name: str) -> str:
+        """歌单名归一化：Navidrome 自动导入时可能给名加扩展名或改动空格。"""
+        name = str(name).strip()
+        for suffix in (".m3u8", ".m3u"):
+            if name.lower().endswith(suffix):
+                name = name[: -len(suffix)]
+        return "".join(name.split()).lower()
+
+    def list_playlists(self) -> list:
+        try:
+            resp = requests.get(f"{self.base}/getPlaylists.view", params=self._params(), timeout=15)
+            resp.raise_for_status()
+            data = resp.json()["subsonic-response"]
+            if data.get("status") != "ok":
+                log.warning("Subsonic 歌单列表查询异常: %s", data.get("error"))
+                return []
+            return (data.get("playlist") or {}).get("children") or []
+        except Exception as e:
+            log.warning("Subsonic 歌单列表查询失败: %s", e)
+            return []
+
+    def delete_playlist(self, playlist_id: str) -> bool:
+        """删除 Navidrome 中的歌单（自动导入的 synced playlist 删源文件不会自动消失）。"""
+        try:
+            resp = requests.get(f"{self.base}/deletePlaylist.view",
+                                params={**self._params(), "id": playlist_id}, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()["subsonic-response"]
+            if data.get("status") != "ok":
+                log.warning("Subsonic 删除歌单失败 %s: %s", playlist_id, data.get("error"))
+                return False
+            return True
+        except Exception as e:
+            log.warning("Subsonic 删除歌单异常 %s: %s", playlist_id, e)
+            return False
 
 
 def display_name(track) -> str:
