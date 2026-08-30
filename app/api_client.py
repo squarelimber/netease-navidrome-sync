@@ -251,13 +251,17 @@ class NCMAPIClient:
         j = self._get("/user/playlist", uid=uid)
         if j.get("code") != 200:
             raise RuntimeError(f"获取歌单列表失败: code={j.get('code')}")
+        playlists = j.get("playlist") or []
+        names = [pl.get("name") or "?" for pl in playlists]
+        log.info("最近播放核对: uid=%s 歌单数=%d 歌单名=%s", uid, len(playlists), names)
         recent_id = None
-        for pl in j.get("playlist") or []:
+        for pl in playlists:
             if "最近播放" in (pl.get("name") or ""):
                 recent_id = pl.get("id")
                 break
         if recent_id is None:
-            raise RuntimeError("未找到『最近播放』歌单（可能还没有播放记录）")
+            raise RuntimeError(
+                f"未找到『最近播放』歌单。uid={uid}，该账号歌单: {names[:10]}")
         songs = self.playlist_track_all(recent_id, limit=limit, offset=0)
         return [{
             "id": s["id"],
