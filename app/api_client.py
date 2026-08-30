@@ -289,7 +289,15 @@ class NCMAPIClient:
         # api-enhanced 返回 {data: {code: 200, account, profile}}（顶层无 code），
         # 其他 fork 可能是顶层 code，两种都兼容
         ok = j.get("code") == 200 or data.get("code") == 200
-        return bool(ok and (data.get("account") or data.get("profile")))
+        if not ok:
+            return False
+        account = data.get("account") or {}
+        profile = data.get("profile") or {}
+        # ncm-api 自带匿名账号（anonimousUser=true、profile=null）：
+        # Cookie 未生效/失效时会落到它，必须判为未登录，否则会误报"已登录"
+        if account.get("anonimousUser"):
+            return False
+        return bool(account or profile)
 
     # ------- 听歌打卡 -------
 

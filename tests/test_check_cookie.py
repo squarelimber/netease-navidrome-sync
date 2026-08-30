@@ -52,3 +52,37 @@ def test_check_cookie_state_distinguishes_network_error():
     c = _client_with({"code": -1, "_request_error": True})
     assert c.check_cookie_state() is None
     assert c.check_cookie() is False
+
+
+def test_check_cookie_anonymous_account_is_not_logged_in():
+    """ncm-api 自带匿名账号（anonimousUser=true、profile=null）必须判为未登录。
+
+    这是 cookie 未生效/失效时的真实响应形状，旧逻辑因 account 非空而误报已登录。
+    """
+    c = _client_with({
+        "data": {
+            "code": 200,
+            "account": {
+                "id": 17866516234,
+                "userName": "1000_5D57...",
+                "type": 1000,
+                "status": -10,
+                "anonimousUser": True,
+            },
+            "profile": None,
+        },
+    })
+    assert c.check_cookie() is False
+    assert c.check_cookie_state() is False
+
+
+def test_check_cookie_real_user_with_profile():
+    """真实登录用户：有 profile、无 anonimousUser 标记。"""
+    c = _client_with({
+        "data": {
+            "code": 200,
+            "account": {"id": 999, "status": 200},
+            "profile": {"userId": 999, "nickname": "real"},
+        },
+    })
+    assert c.check_cookie() is True

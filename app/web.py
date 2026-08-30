@@ -414,8 +414,13 @@ async function load() {
   let st;
   try { st = await api('/api/status'); } catch(e) { return; }
 
-  if (!gateDone && st.cookie_ok !== true) showGateLogin();
-  else if (!gateDone) closeGate();
+  if (st.cookie_ok === true) {
+    if (!gateDone) closeGate();
+  } else if (st.cookie_ok === false) {
+    // 明确失效（含匿名账号误判修复）→ 回到登录页，即使之前已关闭
+    showLoginGate();
+  }
+  // cookie_ok === null（网络不可用）：保持现状，不误报失效
 
   const ckPill = document.getElementById('ck-pill');
   const ckDot = document.getElementById('ck-dot');
@@ -602,6 +607,15 @@ function openGate() {
   gateDone = false;
   document.getElementById('gate').classList.remove('gate-hide');
   showGateLogin();
+}
+function showLoginGate() {
+  // 确保登录页可见且显示登录选项；不重复渲染已在进行的二维码
+  const gate = document.getElementById('gate');
+  if (gate.classList.contains('gate-hide')) {
+    gate.classList.remove('gate-hide');
+    gateDone = false;
+  }
+  if (!document.getElementById('qr-img')) showGateLogin();
 }
 async function qrStart() {
   const tip = document.getElementById('qr-tip');
