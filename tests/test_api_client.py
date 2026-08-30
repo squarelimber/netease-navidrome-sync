@@ -98,16 +98,44 @@ def test_search_retries_rate_limit_405(monkeypatch):
 
 def test_weapi_encrypt_structure():
     out = _weapi_encrypt({"logs": "x"})
-    # param 是 base64（双层 AES 输出）
-    base64.b64decode(out["param"], validate=True)
-    # encSecKey 是 RSA-1024 → 128 字节 hex → 256 字符大写
+    # params 是 base64（双层 AES 输出）
+    decoded = base64.b64decode(out["params"], validate=True)
+    assert len(decoded) % 16 == 0 and len(decoded) >= 16
+    # encSecKey 是 RSA-1024 原始密文 → 128 字节 hex → 256 字符小写
     assert len(out["encSecKey"]) == 256
-    assert out["encSecKey"] == out["encSecKey"].upper()
+    assert out["encSecKey"] == out["encSecKey"].lower()
     int(out["encSecKey"], 16)  # 合法十六进制
 
 
+def test_weapi_encrypt_golden_vector():
+    # 黄金向量：按参考实现（NeteaseCloudMusicApi util/crypto.js）生成，
+    # 已验证可被真实服务器解密（music.163.com /weapi/playlist/detail 返回 200）。
+    out = _weapi_encrypt(
+        {"logs": "x"},
+        cookie="MUSIC_U=abc; _csrf=TESTCSRF123; other=1",
+        _secret_key="Ab3dEf6hIj9kLmNo",
+    )
+    assert out["params"] == (
+        "LoCV0Admo53fklCQxXtxfA3yYJhX26xZwcwDs4RXSouCBu2Mb+etXg2BzVDqSC9E7zwMn3swtnqiYNkiqijMsHO8wxxBZuQOi26TpOVp9UI="
+    )
+    assert out["encSecKey"] == (
+        "c387709a0ac2b5841e633a02d21251a17504ba87489812a6c3a2e9d89860e46d"
+        "e9b2ccf9952a97df2cc32c407156fbb54b96af51d3c3c3d92aeb1b0931bccf00"
+        "6216d32665685d0f1de817d13d03639582a6b40540d55b5a476261a6a56419fb"
+        "cfed6cb5d97f103ead3d8f30df3181c3715beb5a942e0e25ca63d1a66bf68dc4"
+    )
+
+
+def test_weapi_encrypt_csrf_token_in_plaintext():
+    # csrf_token 进入明文：Cookie 有无 _csrf 时密文必须不同
+    a = _weapi_encrypt({"logs": "x"}, cookie="", _secret_key="Ab3dEf6hIj9kLmNo")
+    b = _weapi_encrypt({"logs": "x"}, cookie="_csrf=TESTCSRF123", _secret_key="Ab3dEf6hIj9kLmNo")
+    assert a["params"] == "LoCV0Admo53fklCQxXtxfN8u1rdA0GytGoQACyU98kUKNeB/zHNhOgumvRM0REHD"
+    assert a["params"] != b["params"]
+    assert a["encSecKey"] == b["encSecKey"]  # 同一 secret key → 同一 encSecKey
+
+
 def test_scrobble_direct_posts_music163():
-    import app.api_client as m
     calls = {}
 
     class _Resp:
@@ -124,13 +152,14 @@ def test_scrobble_direct_posts_music163():
         return _Resp()
 
     c = NCMAPIClient("http://mock")
-    c._cookie = "MUSIC_U=abc"
+    c._cookie = "MUSIC_U=abc; _csrf=CSRF123"
     c.session.post = fake_post
     assert c._scrobble_direct(123, 180000) is True
-    assert calls["url"] == "https://music.163.com/api/feedback/weblog"
-    assert calls["headers"]["Cookie"] == "MUSIC_U=abc"
-    assert set(calls["data"]) == {"param", "encSecKey"}
-    base64.b64decode(calls["data"]["param"], validate=True)  # param 为合法 base64 密文
+    # weapi 请求必须发到 /weapi/ 前缀 URL
+    assert calls["url"] == "https://music.163.com/weapi/feedback/weblog"
+    assert calls["headers"]["Cookie"] == "MUSIC_U=abc; _csrf=CSRF123"
+    assert set(calls["data"]) == {"params", "encSecKey"}
+    base64.b64decode(calls["data"]["params"], validate=True)  # params 为合法 base64 密文
 
 
 def test_scrobble_prefers_direct_when_cookie_set():
@@ -280,4 +309,4 @@ def test_custom_music_host_used_in_scrobble_urls():
 
     c.session.post = fake_post
     assert c._scrobble_direct(123, 180000) is True
-    assert urls == ["http://192.168.0.120:3000/api/feedback/weblog"]
+    assert urls == ["http://192.168.0.120:3000/weapi/feedback/weblog"]

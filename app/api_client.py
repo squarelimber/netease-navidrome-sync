@@ -9,13 +9,14 @@ import base64
 import json
 import logging
 import random
+import re
 import string
 import time
 
 import requests
 
 try:
-    from Crypto.Cipher import AES, PKCS1_v1_5
+    from Crypto.Cipher import AES
     from Crypto.PublicKey import RSA
     from Crypto.Util.Padding import pad
     _HAS_CRYPTO = True
@@ -29,36 +30,48 @@ _TRANSIENT_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 _REQUEST_RETRY_ATTEMPTS = 2
 _REQUEST_RETRY_DELAY = 2.0
 
-# ---- weapi 加密常量（对齐 NeteaseCloudMusicApi util/crypto.js）----
-_WEAPI_PRESET_KEY = "0CoJUm6Qyw8Z8juo"
+# ---- weapi 加密常量（逐行对齐 NeteaseCloudMusicApi util/crypto.js + request.js）----
+_WEAPI_PRESET_KEY = "0CoJUm6Qyw8W8jud"
 _WEAPI_IV = "0102030405060708"
 _WEAPI_BASE62 = (string.ascii_lowercase + string.ascii_uppercase + string.digits)
 _WEAPI_PUBLIC_KEY = (
     "-----BEGIN PUBLIC KEY-----\n"
-    "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDgqQn2JZ34ZC28NWYpAUd98iZ37BUrX/aKzmFbt7clFSs6sXqHauqKWqdtLkF2KexO40H1YTX8z2lSgBBOAxLsvaklV8k4cBFK9snQXE9/DDaFt6Rr7iVZMldczhC0JNgTz+SHXT6CBHuX3e9SdB1Ua44oncaTWz7OBGLbCiK45wIDAQAB\n"
+    "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDgtQn2JZ34ZC28NWYpAUd98iZ37BUrX/aKzmFbt7clFSs6sXqHauqKWqdtLkF2KexO40H1YTX8z2lSgBBOAxLsvaklV8k4cBFK9snQXE9/DDaFt6Rr7iVZMldczhC0JNgTz+SHXT6CBHuX3e9SdB1Ua44oncaTWz7OBGLbCiK45wIDAQAB\n"
     "-----END PUBLIC KEY-----\n"
 )
 _MUSIC_HOST = "https://music.163.com"
+_WEAPI_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/86.0.4240.30 Safari/537.36"
+)
 
 
-def _weapi_encrypt(data: dict) -> dict:
-    """weapi 加密，返回 {param, encSecKey}。
+def _weapi_encrypt(data: dict, cookie: str = "", _secret_key: str | None = None) -> dict:
+    """weapi 加密，返回 {params, encSecKey}。
 
-    双层 AES-CBC：内层用固定 preset key，外层用随机 16 位 secret key；
-    secret key 反转后用固定 RSA 公钥加密得到 encSecKey。
+    逐行对齐 NeteaseCloudMusicApi util/crypto.js + util/request.js：
+    明文 = JSON({...data, csrf_token})，csrf_token 取自 Cookie 的 _csrf
+    （无则为空串），无 {os,data} 包裹；双层 AES-CBC：内层用固定 preset key，
+    外层用 16 位 base62 secret key，外层输入为内层密文的 base64 字符串；
+    encSecKey = RSA 无填充（前置 112 个 0 字节）加密反转后的 secret key，
+    小写 hex。表单字段是 params（复数），请求必须发到 /weapi/ 前缀 URL。
     """
-    text = json.dumps(data, separators=(",", ":"))
-    secret_key = "".join(random.choice(_WEAPI_BASE62) for _ in range(16))
+    m = re.search(r"_csrf=([^(;|$)]+)", cookie or "")
+    payload = dict(data)
+    payload["csrf_token"] = m.group(1) if m else ""
+    text = json.dumps(payload, separators=(",", ":"))
+    secret_key = _secret_key or "".join(random.choice(_WEAPI_BASE62) for _ in range(16))
 
-    def _aes_b64(plain: str, key: str) -> str:
+    def _aes(plain: bytes, key: str) -> bytes:
         cipher = AES.new(key.encode("utf-8"), AES.MODE_CBC, _WEAPI_IV.encode("utf-8"))
-        enc = cipher.encrypt(pad(plain.encode("utf-8"), 16))
-        return base64.b64encode(enc).decode("ascii")
+        return cipher.encrypt(pad(plain, 16))
 
-    param = _aes_b64(_aes_b64(text, _WEAPI_PRESET_KEY), secret_key)
+    inner_b64 = base64.b64encode(_aes(text.encode("utf-8"), _WEAPI_PRESET_KEY)).decode("ascii")
+    params = base64.b64encode(_aes(inner_b64.encode("ascii"), secret_key)).decode("ascii")
     pub = RSA.import_key(_WEAPI_PUBLIC_KEY)
-    enc_sec = PKCS1_v1_5.new(pub).encrypt(secret_key[::-1].encode("utf-8"))
-    return {"param": param, "encSecKey": enc_sec.hex().upper()}
+    block = b"\x00" * (128 - len(secret_key)) + secret_key[::-1].encode("utf-8")
+    raw = pow(int.from_bytes(block, "big"), pub.e, pub.n).to_bytes(128, "big")
+    return {"params": params, "encSecKey": raw.hex()}
 
 
 class NCMAPIClient:
@@ -317,7 +330,7 @@ class NCMAPIClient:
     def scrobble(self, song_id: int, time_ms: int = 180000) -> bool:
         """写入听歌记录（最近播放 + 听歌排行计数）。
 
-        优先直连 music.163.com 的 /api/feedback/weblog（weapi），绕开
+        优先直连 music.163.com 的 /weapi/feedback/weblog（weapi 加密），绕开
         ncm-api 转发的 clientlog3.music.163.com（后者常被 403/TLS 拒连）。
         无 Cookie 或 pycryptodome 缺失时回退到 ncm-api /scrobble。
         """
@@ -330,7 +343,7 @@ class NCMAPIClient:
         return self._scrobble_via_ncm(song_id, time_ms)
 
     def _scrobble_direct(self, song_id: int, time_ms: int) -> bool:
-        """直连 music.163.com/api/feedback/weblog（weapi 加密）。"""
+        """直连 music.163.com/weapi/feedback/weblog（weapi 加密）。"""
         body = {
             "logs": json.dumps([{
                 "action": "play",
@@ -343,16 +356,14 @@ class NCMAPIClient:
                     "type": "song",
                     "wifi": 0,
                     "source": "list",
-                    "mainSite": 1,
-                    "content": "",
                 },
             }], ensure_ascii=False),
         }
-        payload = _weapi_encrypt(body)
+        payload = _weapi_encrypt(body, self._cookie)
         r = self.session.post(
-            f"{self.music_host}/api/feedback/weblog",
+            f"{self.music_host}/weapi/feedback/weblog",
             data=payload,
-            headers={"User-Agent": "Mozilla/5.0", "Referer": self.music_host + "/",
+            headers={"User-Agent": _WEAPI_UA, "Referer": self.music_host,
                      "Cookie": self._cookie},
             timeout=TIMEOUT,
         )
