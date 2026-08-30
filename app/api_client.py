@@ -229,6 +229,46 @@ class NCMAPIClient:
         return [self._norm_song(s)
                 for s in ((j.get("data") or {}).get("dailySongs") or [])]
 
+    # ------- 最近播放 -------
+
+    def recent_songs(self, limit: int = 100) -> list:
+        """拉取网易云最近播放列表（直连 music.163.com，weapi 加密）。
+
+        返回 [{id, title, artists, album, duration_ms, time}, ...]，
+        time 为播放的 Unix 时间戳（秒）。Cookie 缺失或网易云拒绝时抛异常。
+        """
+        if not self._cookie:
+            raise RuntimeError("网易云 Cookie 未设置")
+        if not _HAS_CRYPTO:
+            raise RuntimeError("缺少 pycryptodome，无法直连网易云")
+        payload = _weapi_encrypt({"limit": limit, "offset": 0, "total": True})
+        r = self.session.post(
+            f"{_MUSIC_HOST}/api/song/list/recent",
+            data=payload,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": _MUSIC_HOST + "/",
+                     "Cookie": self._cookie},
+            timeout=TIMEOUT,
+        )
+        r.raise_for_status()
+        j = r.json()
+        if j.get("code") != 200:
+            raise RuntimeError(f"网易云返回 code={j.get('code')}")
+        out = []
+        for item in j.get("list") or []:
+            song = item.get("song") or {}
+            t = item.get("time") or 0
+            if t > 10**12:  # 兼容毫秒时间戳
+                t = t // 1000
+            out.append({
+                "id": song.get("id"),
+                "title": song.get("name", ""),
+                "artists": [a.get("name", "") for a in song.get("artists") or []],
+                "album": (song.get("album") or {}).get("name", ""),
+                "duration_ms": song.get("duration", 0),
+                "time": t,
+            })
+        return out
+
     # ------- 账号 -------
 
     def check_cookie(self) -> bool:

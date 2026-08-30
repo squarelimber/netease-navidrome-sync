@@ -446,6 +446,7 @@ class Jobs:
             return {"ok": True, "count": 0, "msg": f"无新记录（上次: {int(last_ts)}）"}
 
         success, fail, max_ts = 0, 0, last_ts
+        songs = []  # 成功打卡的歌（供状态页/最近播放比对）
         for l in listens:
             listen_key = f"{l['listened_at']}|{l['artist']}|{l['title']}"
             if l["listened_at"] <= last_ts and listen_key not in pending:
@@ -470,6 +471,8 @@ class Jobs:
                 self.scrobble_limiter.wait()
                 if self.ncm.scrobble(hit["id"], time_ms):
                     success += 1
+                    songs.append({"ncm_id": hit["id"], "artist": l["artist"],
+                                  "title": l["title"]})
                     if l["listened_at"] > max_ts:
                         max_ts = l["listened_at"]
                 else:
@@ -488,7 +491,7 @@ class Jobs:
         skipped = len(listens) - success - fail
         log.info("听歌回传: %d 成功, %d 失败（跳过 %d 首）", success, fail, skipped)
         return {"ok": fail == 0, "count": success,
-                "fail": fail, "total": len(listens)}
+                "fail": fail, "total": len(listens), "songs": songs}
 
     # ---------- 主流程 ----------
 

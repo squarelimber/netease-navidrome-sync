@@ -14,6 +14,10 @@ import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from .matcher import best_match
+from .sources.base import Track
+from .sources.listenbrainz import get_recent_listens
+
 log = logging.getLogger(__name__)
 
 
@@ -319,6 +323,7 @@ PAGE = r"""<!DOCTYPE html>
         <button class="btn" id="run-btn" onclick="triggerRun()">立即运行</button>
         <button class="btn ghost" id="cleanup-btn" onclick="cleanupPlaylists()">清理过期歌单</button>
         <button class="btn ghost" id="scrobble-btn" onclick="scrobbleOnly()">仅 Scrobble（测试）</button>
+        <button class="btn ghost" onclick="showRecent()">最近播放核对</button>
         <button class="btn danger hide" id="stop-btn" onclick="stopRun()">停止</button>
         <button class="btn ghost" id="refresh-btn" onclick="toggleRefresh()">暂停自动刷新</button>
       </div>
@@ -531,6 +536,41 @@ async function scrobbleOnly() {
     btn.disabled = false; btn.textContent = '仅 Scrobble（测试）';
   }
   setTimeout(load, 500);
+}
+async function showRecent() {
+  showModal(`
+    <div class="modal-head"><h2>最近播放核对</h2><button class="txt-btn" onclick="hideModal()">关闭 ✕</button></div>
+    <div id="recent-body" class="search-status">正在拉取网易云最近播放与 LB 播放记录…</div>
+  `);
+  const body = document.getElementById('recent-body');
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const fmt = ts => ts ? new Date(ts*1000).toLocaleString('zh-CN',
+      {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'}) : '';
+  try {
+    const r = await api('/api/scrobble/verify?hours=24');
+    if (!r.ok) { body.textContent = r.msg || '请求失败'; return; }
+    let html = `<div class="cfg-sep">LB 播放（近 24 小时）${r.total} 首 · 在网易云最近播放中找到 ${r.matched} 首</div>`;
+    for (const it of r.results) {
+      const m = it.matched;
+      html += `<div style="font:12px/1.8 var(--mono);${m ? '' : 'color:var(--bad)'}">
+        ${m ? '✓' : '✗'} ${esc(it.artist)} - ${esc(it.title)}
+        <span style="opacity:.55">${fmt(it.listened_at)}</span>
+        ${m ? `<span style="opacity:.55">→ 网易云 ${fmt(m.time)}</span>` : '<span>（最近播放中未找到）</span>'}
+      </div>`;
+    }
+    html += `<div class="cfg-sep">网易云最近播放（前 50）</div>`;
+    if (!r.recent.length) {
+      html += '<div class="dim">最近播放列表为空</div>';
+    }
+    r.recent.slice(0, 50).forEach((s, i) => {
+      html += `<div style="font:12px/1.8 var(--mono);opacity:.8">
+        ${i+1}. ${esc(s.title)} - ${esc((s.artists||[]).join('/'))}
+        <span style="opacity:.55">${fmt(s.time)}</span></div>`;
+    });
+    body.innerHTML = html;
+  } catch (e) {
+    body.textContent = '请求失败: ' + e;
+  }
 }
 function toggleRefresh() {
   autoRefresh = !autoRefresh;
@@ -874,6 +914,66 @@ def create_app(cfg, db, jobs, scheduler=None):
             return {"ok": False, "msg": str(e)}
         finally:
             jobs._lock.release()
+
+    @app.get("/api/recent")
+    def recent_songs(limit: int = 100):
+        """拉取网易云最近播放列表（供回传核对）。"""
+        try:
+            songs = jobs.ncm.recent_songs(limit=max(1, min(limit, 200)))
+            return {"ok": True, "songs": songs}
+        except Exception as e:
+            log.warning("拉取最近播放失败: %s", e, exc_info=True)
+            return {"ok": False, "msg": str(e)}
+
+    @app.get("/api/scrobble/verify")
+    def scrobble_verify(hours: int = 24):
+        """核对：最近 N 小时的 ListenBrainz 播放 vs 网易云最近播放列表。
+
+        用与回传相同的模糊匹配（标题+歌手+时长）判断每首 LB 播放
+        是否出现在网易云最近播放中，用于确认 scrobble 是否真的生效。
+        """
+        lb = cfg.sources.get("listenbrainz")
+        username = (lb.extra.get("username") or "") if lb else ""
+        if not username:
+            return {"ok": False, "msg": "未配置 ListenBrainz 用户名"}
+        hours = max(1, min(hours, 168))
+        min_ts = time.time() - hours * 3600
+        listens = get_recent_listens(username, min_ts=min_ts, limit=200)
+        try:
+            recent = jobs.ncm.recent_songs(100)
+        except Exception as e:
+            log.warning("拉取最近播放失败: %s", e, exc_info=True)
+            return {"ok": False, "msg": f"拉取网易云最近播放失败: {e}"}
+        # 候选格式对齐 matcher.is_match：name/artists/duration(秒)
+        candidates = []
+        for s in recent:
+            c = dict(s)
+            c["name"] = s["title"]
+            if s.get("duration_ms"):
+                c["duration"] = round(s["duration_ms"] / 1000)
+            candidates.append(c)
+        results = []
+        for l in listens:
+            track = Track(title=l["title"], artists=[l["artist"]],
+                          duration_ms=l.get("duration_ms") or 0)
+            hit = best_match(track, candidates,
+                             cfg.title_threshold, cfg.max_duration_diff)
+            if not hit:
+                # 宽松重试（歌手按 / 拆分），与回传逻辑一致
+                track2 = Track(title=l["title"], artists=l["artist"].split("/"),
+                               duration_ms=l.get("duration_ms") or 0)
+                hit = best_match(track2, candidates,
+                                 cfg.title_threshold - 5, cfg.max_duration_diff + 5)
+            results.append({
+                "artist": l["artist"], "title": l["title"],
+                "listened_at": l["listened_at"],
+                "matched": ({"id": hit.get("id"), "title": hit.get("name"),
+                             "artists": hit.get("artists", []),
+                             "time": hit.get("time")} if hit else None),
+            })
+        matched_n = sum(1 for r in results if r["matched"])
+        return {"ok": True, "hours": hours, "recent": recent,
+                "results": results, "matched": matched_n, "total": len(results)}
 
     @app.post("/api/ytdlp-cookie/check")
     def check_ytdlp_cookie():

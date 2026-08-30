@@ -160,3 +160,59 @@ def test_scrobble_falls_back_to_ncm_without_cookie():
     c._get = fake_get
     assert c.scrobble(456) is True
     assert ncm == ["/scrobble"]
+
+
+# ---- 最近播放 ----
+
+def test_recent_songs_parses_list():
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"code": 200, "list": [
+                {"song": {"id": 1, "name": "晴天", "artists": [{"name": "周杰伦"}],
+                          "album": {"name": "叶惠美"}, "duration": 269000},
+                 "time": 1750000000000},  # 毫秒时间戳
+                {"song": {"id": 2, "name": "夜曲", "artists": [{"name": "周杰伦"}],
+                          "album": {"name": "x"}, "duration": 238000},
+                 "time": 1750000100},  # 秒时间戳
+            ]}
+
+    c = NCMAPIClient("http://mock")
+    c._cookie = "MUSIC_U=abc"
+    c.session.post = lambda url, data=None, headers=None, timeout=None: _Resp()
+    songs = c.recent_songs(50)
+    assert [s["id"] for s in songs] == [1, 2]
+    assert songs[0]["title"] == "晴天"
+    assert songs[0]["artists"] == ["周杰伦"]
+    assert songs[0]["duration_ms"] == 269000
+    assert songs[0]["time"] == 1750000000  # 毫秒 → 秒
+    assert songs[1]["time"] == 1750000100
+
+
+def test_recent_songs_requires_cookie():
+    c = NCMAPIClient("http://mock")
+    try:
+        c.recent_songs()
+        assert False, "无 Cookie 应抛异常"
+    except RuntimeError as e:
+        assert "Cookie" in str(e)
+
+
+def test_recent_songs_error_code_raises():
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"code": 301}
+
+    c = NCMAPIClient("http://mock")
+    c._cookie = "MUSIC_U=abc"
+    c.session.post = lambda url, data=None, headers=None, timeout=None: _Resp()
+    try:
+        c.recent_songs()
+        assert False, "非 200 code 应抛异常"
+    except RuntimeError as e:
+        assert "301" in str(e)
