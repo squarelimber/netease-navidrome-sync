@@ -17,6 +17,14 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
         写入音乐目录 + 生成 .m3u8 ──> Navidrome 自动扫描入库
 ```
 
+## 当前稳定版
+
+**v1.0.0**（2026-08-30）— 首个稳定版。
+
+- **听歌回传修复并验证**：完整打卡协议（`startplay` + `playend` + `mainsite` 字段 + 秒级时长），已实测真实写入网易云最近播放/听歌排行（此前"返回 200 但不记录"的静默丢弃问题已解决）
+- **状态页新增**：重置 Scrobble 水位（补录历史积压）、最近播放核对（验证回传是否生效）
+- 下载链、歌单同步、扫码登录、繁简归一、失败重试等既有功能保持
+
 ## 功能
 
 - **三源推荐聚合**：网易云每日推荐（30 首/天，全部进 `网易云日推-{日期}` 歌单）；ListenBrainz 每周歌单/CF 与 Last.fm 常听/最爱相似曲目合并进 `每日发现-{日期}` 歌单，按分数每天收取 `daily_discover_limit` 首（默认 10，已收过的曲目自动剔除、不占名额）
@@ -29,7 +37,7 @@ Navidrome 播放 ──scrobble──> ListenBrainz / Last.fm
 - **自动匹配校验**：归一化（含繁简转换）+ 模糊比对（标题/歌手/时长），避免 Cover 版误下
 - **完整元数据**：内嵌 ID3/FLAC/M4A 标签、封面、歌词，写 `.lrc` 旁挂文件
 - **查重不重复**：调用 Navidrome 的 Subsonic `search3` 接口检测曲库已有曲目
-- **听歌回传**：每日自动将 ListenBrainz 的新播放记录回传到网易云（听歌排行 + 最近播放）；weapi 直连 `music.163.com`，绕开 ncm-api 的 `clientlog3` 日志域名
+- **听歌回传**：每日自动将 ListenBrainz 的新播放记录回传到网易云（听歌排行 + 最近播放）；weapi 直连 `music.163.com`，按网易云完整打卡协议发送（先 `startplay` 再 `playend`、两条都带 `mainsite` 字段、时长用秒），绕开 ncm-api 的 `clientlog3` 日志域名；已打卡播放按时间戳水位去重，可用状态页"重置 Scrobble 水位"补录历史积压
 - **失败重试队列**：匹配/下载失败自动入队，按退避策略每日重试
 - **轻量状态页**：Cookie 健康、统计、运行历史、失败队列，可暂停刷新、中止任务、逐条重试
 - **滚动日志**：日志按天午夜滚动，保留最近 14 个历史文件
@@ -146,7 +154,7 @@ Navidrome 设置中开启 ListenBrainz / Last.fm scrobble：
                                  └── 工具每日回传 → 网易云听歌排行
 ```
 
-本工具每日同步时，会自动从 ListenBrainz 读取新播放记录，匹配网易云曲目后调用 `/scrobble` 回传到网易云，保持听歌排行和最近播放同步。
+本工具每日同步时，会自动从 ListenBrainz 读取新播放记录，匹配网易云曲目后通过 weapi 直连 `music.163.com` 回传（完整打卡协议：`startplay` + `playend`、`mainsite` 字段、时长用秒），保持听歌排行和最近播放同步。已打卡的播放按时间戳水位去重；如需重新补录历史播放，用状态页的"重置 Scrobble 水位"按钮把水位归零，再点"仅 Scrobble（测试）"即可。
 
 ## 目录结构（运行后）
 
@@ -175,6 +183,9 @@ music/
 - 最近运行记录（已下/跳过/失败数量 + 耗时）
 - 最近入库列表（可滚动）
 - 失败/重试队列（可滚动），逐条重试
+- **仅 Scrobble（测试）**：只跑听歌回传，不触发下载/建单
+- **重置 Scrobble 水位**：把听歌回传的时间戳水位归零，下次运行重新打卡全部 LB 播放（用于补录历史积压，带确认弹窗）
+- **最近播放核对**：比对近 24 小时 LB 播放 vs 网易云最近播放，确认回传是否真的生效
 - 停止任务 / 暂停自动刷新
 
 ## 运行与排错
@@ -197,7 +208,8 @@ docker compose restart navidrome-sync
 
 - **网易云 Cookie 无效**：状态页重新扫码登录
 - **旧推荐歌单**：每天任务完成后自动清理超过 `playlist_retention_days` 的网易云日推、每日发现 `.m3u8`（以及 Navidrome 里自动导入的对应歌单）；固定歌单和音频文件不会删除
-- **网易云听歌回传全部失败（502/405/403）**：Cookie 校验成功不代表 `/scrobble` 上游可用。回传**优先直连 `music.163.com/api/feedback/weblog`（weapi 加密）**，绕开 ncm-api 转发的 `clientlog3.music.163.com`（该日志域名常被 403/TLS 拒连，是 NAS 上回传全挂的常见根因）；仅当无 Cookie 或 pycryptodome 缺失时才回退到 ncm-api `/scrobble`。回传已按 2 秒限速并对临时 502/频控响应自动重试。若直连仍失败，检查容器到 `music.163.com` 的出站网络；若走 ncm-api 兜底，再检查其 `HTTP_PROXY/HTTPS_PROXY` 代理与 TLS 连接
+- **网易云听歌回传全部失败（502/405/403）**：Cookie 校验成功不代表 `/scrobble` 上游可用。回传**优先直连 `music.163.com/weapi/feedback/weblog`（weapi 加密）**，绕开 ncm-api 转发的 `clientlog3.music.163.com`（该日志域名常被 403/TLS 拒连，是 NAS 上回传全挂的常见根因）；仅当无 Cookie 或 pycryptodome 缺失时才回退到 ncm-api `/scrobble`。回传已按 2 秒限速并对临时 502/频控响应自动重试。若直连仍失败，检查容器到 `music.163.com` 的出站网络；若走 ncm-api 兜底，再检查其 `HTTP_PROXY/HTTPS_PROXY` 代理与 TLS 连接
+- **回传返回成功但 App 最近播放不更新**：网易云对不完整的打卡 payload 会**静默丢弃**（接口返回 200 但不记录）。完整打卡必须同时满足：① 先发 `startplay` 再发 `playend`（两条独立请求）；② 两条都带 `mainsite`/`mainsiteWeb`/`content` 字段；③ `time` 用**秒**（传毫秒会被当非法时长丢弃）。本工具已按此协议实现；若升级后仍不记录，用状态页"最近播放核对"比对，或检查是否走了 ncm-api 兜底（兜底路径不带完整 payload）
 - **YouTube Cookie 无效**：重新导出 Netscape 格式 Cookie；403 或风控错误会显示为“无法判断”，不会直接误报失效
 - **yt-dlp 报 403/503 或没有 m4a**：先看日志中的两次格式探测结果；程序会比较匿名/Cookie 模式，并自动尝试 `m4a`、`mp4`、`aac` 中实际可用的音频格式。两种模式都没有直链时才会切换到 musicdl 后备源
 - **某首歌一直失败**：VIP 曲目且各平台均无免费音源，标记为 `dead`
@@ -210,7 +222,7 @@ docker compose restart navidrome-sync
                 │                         ↑
                 │                    Docker 容器
                 │                    (moefurina/ncm-api)
-                ├──→ weapi 直连 ──→ music.163.com/api/feedback/weblog（听歌回传，优先）
+                ├──→ weapi 直连 ──→ music.163.com/weapi/feedback/weblog（听歌回传，优先）
                 ↓
           yt-dlp（匿名/Cookie 双模式格式探测）
              └──→ YouTube 音频直链（m4a/mp4/aac）
