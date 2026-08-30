@@ -162,60 +162,60 @@ def test_scrobble_falls_back_to_ncm_without_cookie():
     assert ncm == ["/scrobble"]
 
 
-# ---- 最近播放 ----
+# ---- 最近播放（ncm-api 歌单方案）----
 
-def test_recent_songs_parses_list():
-    class _Resp:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"code": 200, "list": [
-                {"song": {"id": 1, "name": "晴天", "artists": [{"name": "周杰伦"}],
-                          "album": {"name": "叶惠美"}, "duration": 269000},
-                 "time": 1750000000000},  # 毫秒时间戳
-                {"song": {"id": 2, "name": "夜曲", "artists": [{"name": "周杰伦"}],
-                          "album": {"name": "x"}, "duration": 238000},
-                 "time": 1750000100},  # 秒时间戳
+def test_recent_songs_via_playlist():
+    def fake_get(path, **params):
+        if path == "/login/status":
+            return {"code": 200, "data": {"account": {"id": 42}}}
+        if path == "/user/playlist":
+            assert params["uid"] == 42
+            return {"code": 200, "playlist": [
+                {"id": 111, "name": "我的歌单"},
+                {"id": 222, "name": "最近播放"},
             ]}
+        if path == "/playlist/track/all":
+            assert params["id"] == 222 and params["limit"] == 100
+            return {"code": 200, "songs": [
+                {"id": 1, "name": "晴天", "ar": [{"name": "周杰伦"}],
+                 "al": {"name": "叶惠美"}, "dt": 269000},
+            ]}
+        return {"code": -1}
 
-    c = NCMAPIClient("http://mock")
-    c._cookie = "MUSIC_U=abc"
-    c.session.post = lambda url, data=None, headers=None, timeout=None: _Resp()
-    songs = c.recent_songs(50)
-    assert [s["id"] for s in songs] == [1, 2]
+    c = _client(fake_get)
+    songs = c.recent_songs(100)
+    assert len(songs) == 1
+    assert songs[0]["id"] == 1
     assert songs[0]["title"] == "晴天"
     assert songs[0]["artists"] == ["周杰伦"]
+    assert songs[0]["album"] == "叶惠美"
     assert songs[0]["duration_ms"] == 269000
-    assert songs[0]["time"] == 1750000000  # 毫秒 → 秒
-    assert songs[1]["time"] == 1750000100
+    assert songs[0]["time"] == 0  # 歌单接口无播放时间戳
 
 
-def test_recent_songs_requires_cookie():
-    c = NCMAPIClient("http://mock")
+def test_recent_songs_no_login_raises():
+    c = _client(lambda path, **params: {"code": 301})
     try:
         c.recent_songs()
-        assert False, "无 Cookie 应抛异常"
+        assert False, "无登录态应抛异常"
     except RuntimeError as e:
-        assert "Cookie" in str(e)
+        assert "用户 ID" in str(e)
 
 
-def test_recent_songs_error_code_raises():
-    class _Resp:
-        def raise_for_status(self):
-            pass
+def test_recent_songs_no_recent_playlist_raises():
+    def fake_get(path, **params):
+        if path == "/login/status":
+            return {"code": 200, "data": {"account": {"id": 42}}}
+        if path == "/user/playlist":
+            return {"code": 200, "playlist": [{"id": 111, "name": "我的歌单"}]}
+        return {"code": -1}
 
-        def json(self):
-            return {"code": 301}
-
-    c = NCMAPIClient("http://mock")
-    c._cookie = "MUSIC_U=abc"
-    c.session.post = lambda url, data=None, headers=None, timeout=None: _Resp()
+    c = _client(fake_get)
     try:
         c.recent_songs()
-        assert False, "非 200 code 应抛异常"
+        assert False, "无最近播放歌单应抛异常"
     except RuntimeError as e:
-        assert "301" in str(e)
+        assert "最近播放" in str(e)
 
 
 # ---- ncm_music_host 直连开关 ----
@@ -234,23 +234,13 @@ def test_empty_music_host_disables_direct_scrobble():
     assert ncm == ["/scrobble"]  # 直连被禁用，直接走 ncm-api
 
 
-def test_empty_music_host_disables_recent_songs():
-    c = NCMAPIClient("http://mock", music_host="")
-    c._cookie = "MUSIC_U=abc"
-    try:
-        c.recent_songs()
-        assert False, "直连禁用时应抛异常"
-    except RuntimeError as e:
-        assert "禁用" in str(e)
-
-
-def test_custom_music_host_used_in_urls():
+def test_custom_music_host_used_in_scrobble_urls():
     class _Resp:
         def raise_for_status(self):
             pass
 
         def json(self):
-            return {"code": 200, "list": []}
+            return {"code": 200}
 
     c = NCMAPIClient("http://mock", music_host="http://192.168.0.120:3000")
     c._cookie = "MUSIC_U=abc"
@@ -261,5 +251,5 @@ def test_custom_music_host_used_in_urls():
         return _Resp()
 
     c.session.post = fake_post
-    c.recent_songs(10)
-    assert urls == ["http://192.168.0.120:3000/api/song/list/recent"]
+    assert c._scrobble_direct(123, 180000) is True
+    assert urls == ["http://192.168.0.120:3000/api/feedback/weblog"]

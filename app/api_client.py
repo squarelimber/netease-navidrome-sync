@@ -234,44 +234,39 @@ class NCMAPIClient:
     # ------- 最近播放 -------
 
     def recent_songs(self, limit: int = 100) -> list:
-        """拉取网易云最近播放列表（直连 music.163.com，weapi 加密）。
+        """拉取网易云最近播放列表（经 ncm-api：登录态取 UID → 用户歌单找『最近播放』→ 拉曲目）。
 
+        直连的 /api/song/list/recent 在新版网易云返回 code=404，故走 ncm-api 已验证可用的端点。
         返回 [{id, title, artists, album, duration_ms, time}, ...]，
-        time 为播放的 Unix 时间戳（秒）。Cookie 缺失或网易云拒绝时抛异常。
+        time 恒为 0（歌单接口无播放时间戳）。登录态无效或找不到歌单时抛异常。
         """
-        if not self.music_host:
-            raise RuntimeError("网易云直连已禁用（ncm_music_host 为空）")
-        if not self._cookie:
-            raise RuntimeError("网易云 Cookie 未设置")
-        if not _HAS_CRYPTO:
-            raise RuntimeError("缺少 pycryptodome，无法直连网易云")
-        payload = _weapi_encrypt({"limit": limit, "offset": 0, "total": True})
-        r = self.session.post(
-            f"{self.music_host}/api/song/list/recent",
-            data=payload,
-            headers={"User-Agent": "Mozilla/5.0", "Referer": self.music_host + "/",
-                     "Cookie": self._cookie},
-            timeout=TIMEOUT,
-        )
-        r.raise_for_status()
-        j = r.json()
+        j = self._get("/login/status")
+        data = j.get("data") or {}
+        account = data.get("account") or {}
+        profile = data.get("profile") or {}
+        uid = (account.get("id") or account.get("userId")
+               or profile.get("userId") or profile.get("id"))
+        if not uid:
+            raise RuntimeError("无法获取用户 ID（网易云登录态无效？）")
+        j = self._get("/user/playlist", uid=uid)
         if j.get("code") != 200:
-            raise RuntimeError(f"网易云返回 code={j.get('code')}")
-        out = []
-        for item in j.get("list") or []:
-            song = item.get("song") or {}
-            t = item.get("time") or 0
-            if t > 10**12:  # 兼容毫秒时间戳
-                t = t // 1000
-            out.append({
-                "id": song.get("id"),
-                "title": song.get("name", ""),
-                "artists": [a.get("name", "") for a in song.get("artists") or []],
-                "album": (song.get("album") or {}).get("name", ""),
-                "duration_ms": song.get("duration", 0),
-                "time": t,
-            })
-        return out
+            raise RuntimeError(f"获取歌单列表失败: code={j.get('code')}")
+        recent_id = None
+        for pl in j.get("playlist") or []:
+            if "最近播放" in (pl.get("name") or ""):
+                recent_id = pl.get("id")
+                break
+        if recent_id is None:
+            raise RuntimeError("未找到『最近播放』歌单（可能还没有播放记录）")
+        songs = self.playlist_track_all(recent_id, limit=limit, offset=0)
+        return [{
+            "id": s["id"],
+            "title": s["name"],
+            "artists": s["artists"],
+            "album": s["album"],
+            "duration_ms": s["duration_ms"],
+            "time": 0,
+        } for s in songs[:limit]]
 
     # ------- 账号 -------
 
