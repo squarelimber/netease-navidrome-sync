@@ -233,44 +233,43 @@ class NCMAPIClient:
 
     # ------- 最近播放 -------
 
-    def recent_songs(self, limit: int = 100) -> list:
-        """拉取网易云最近播放列表（经 ncm-api：登录态取 UID → 用户歌单找『最近播放』→ 拉曲目）。
+    @staticmethod
+    def _norm_recent_song(item: dict) -> dict:
+        """归一化『最近播放』条目，兼容直接结构与 {song:{...}} 包裹结构。"""
+        s = item.get("song") if isinstance(item.get("song"), dict) else item
+        artists = s.get("artists") or s.get("ar") or []
+        album = s.get("album") or s.get("al") or {}
+        t = item.get("time") or s.get("time") or 0
+        if isinstance(t, (int, float)) and t > 1e12:  # 毫秒 → 秒
+            t = t / 1000
+        return {
+            "id": s.get("id"),
+            "title": s.get("name", ""),
+            "artists": [a.get("name", "") for a in artists],
+            "album": album.get("name", "") if isinstance(album, dict) else str(album or ""),
+            "duration_ms": s.get("dt") or s.get("duration") or 0,
+            "time": int(t),
+        }
 
-        直连的 /api/song/list/recent 在新版网易云返回 code=404，故走 ncm-api 已验证可用的端点。
+    def recent_songs(self, limit: int = 100) -> list:
+        """拉取网易云最近播放列表（经 ncm-api 的 /record/recent/song 端点）。
+
+        直连的 /api/song/list/recent 已下线（code=404），且『最近播放』并非
+        /user/playlist 里的歌单，故走 ncm-api 专用的 /record/recent/song。
         返回 [{id, title, artists, album, duration_ms, time}, ...]，
-        time 恒为 0（歌单接口无播放时间戳）。登录态无效或找不到歌单时抛异常。
+        time 为播放时间戳（秒）。登录态无效或无播放记录时返回空/抛异常。
         """
-        j = self._get("/login/status")
-        data = j.get("data") or {}
-        account = data.get("account") or {}
-        profile = data.get("profile") or {}
-        uid = (account.get("id") or account.get("userId")
-               or profile.get("userId") or profile.get("id"))
-        if not uid:
-            raise RuntimeError("无法获取用户 ID（网易云登录态无效？）")
-        j = self._get("/user/playlist", uid=uid)
+        j = self._get("/record/recent/song", limit=limit)
+        if j.get("_request_error"):
+            raise RuntimeError("获取最近播放失败：ncm-api 不可用")
         if j.get("code") != 200:
-            raise RuntimeError(f"获取歌单列表失败: code={j.get('code')}")
-        playlists = j.get("playlist") or []
-        names = [pl.get("name") or "?" for pl in playlists]
-        log.info("最近播放核对: uid=%s 歌单数=%d 歌单名=%s", uid, len(playlists), names)
-        recent_id = None
-        for pl in playlists:
-            if "最近播放" in (pl.get("name") or ""):
-                recent_id = pl.get("id")
-                break
-        if recent_id is None:
-            raise RuntimeError(
-                f"未找到『最近播放』歌单。uid={uid}，该账号歌单: {names[:10]}")
-        songs = self.playlist_track_all(recent_id, limit=limit, offset=0)
-        return [{
-            "id": s["id"],
-            "title": s["name"],
-            "artists": s["artists"],
-            "album": s["album"],
-            "duration_ms": s["duration_ms"],
-            "time": 0,
-        } for s in songs[:limit]]
+            raise RuntimeError(f"获取最近播放失败: code={j.get('code')}")
+        data = j.get("data") or {}
+        songs = data.get("list") or []
+        if songs:
+            log.info("最近播放核对: total=%s 首条keys=%s",
+                     data.get("total"), list(songs[0].keys()))
+        return [self._norm_recent_song(s) for s in songs[:limit]]
 
     # ------- 账号 -------
 

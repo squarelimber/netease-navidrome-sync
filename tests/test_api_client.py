@@ -162,25 +162,16 @@ def test_scrobble_falls_back_to_ncm_without_cookie():
     assert ncm == ["/scrobble"]
 
 
-# ---- 最近播放（ncm-api 歌单方案）----
+# ---- 最近播放（ncm-api /record/recent/song 方案）----
 
-def test_recent_songs_via_playlist():
+def test_recent_songs_via_record():
     def fake_get(path, **params):
-        if path == "/login/status":
-            return {"code": 200, "data": {"account": {"id": 42}}}
-        if path == "/user/playlist":
-            assert params["uid"] == 42
-            return {"code": 200, "playlist": [
-                {"id": 111, "name": "我的歌单"},
-                {"id": 222, "name": "最近播放"},
-            ]}
-        if path == "/playlist/track/all":
-            assert params["id"] == 222 and params["limit"] == 100
-            return {"code": 200, "songs": [
-                {"id": 1, "name": "晴天", "ar": [{"name": "周杰伦"}],
-                 "al": {"name": "叶惠美"}, "dt": 269000},
-            ]}
-        return {"code": -1}
+        assert path == "/record/recent/song"
+        assert params["limit"] == 100
+        return {"code": 200, "data": {"total": 1, "list": [
+            {"id": 1, "name": "晴天", "ar": [{"name": "周杰伦"}],
+             "al": {"name": "叶惠美"}, "dt": 269000, "time": 1700000000000},
+        ]}, "message": ""}
 
     c = _client(fake_get)
     songs = c.recent_songs(100)
@@ -190,32 +181,49 @@ def test_recent_songs_via_playlist():
     assert songs[0]["artists"] == ["周杰伦"]
     assert songs[0]["album"] == "叶惠美"
     assert songs[0]["duration_ms"] == 269000
-    assert songs[0]["time"] == 0  # 歌单接口无播放时间戳
+    assert songs[0]["time"] == 1700000000  # 毫秒 → 秒
 
 
-def test_recent_songs_no_login_raises():
-    c = _client(lambda path, **params: {"code": 301})
-    try:
-        c.recent_songs()
-        assert False, "无登录态应抛异常"
-    except RuntimeError as e:
-        assert "用户 ID" in str(e)
-
-
-def test_recent_songs_no_recent_playlist_raises():
+def test_recent_songs_wrapped_song():
+    """条目被 {song:{...}} 包裹时也能解析。"""
     def fake_get(path, **params):
-        if path == "/login/status":
-            return {"code": 200, "data": {"account": {"id": 42}}}
-        if path == "/user/playlist":
-            return {"code": 200, "playlist": [{"id": 111, "name": "我的歌单"}]}
-        return {"code": -1}
+        return {"code": 200, "data": {"total": 1, "list": [
+            {"song": {"id": 2, "name": "夜曲", "artists": [{"name": "周杰伦"}],
+                      "album": {"name": "十一月的萧邦"}, "duration": 227000},
+             "time": 1700000123},
+        ]}}
 
     c = _client(fake_get)
+    songs = c.recent_songs(10)
+    assert songs[0]["id"] == 2
+    assert songs[0]["title"] == "夜曲"
+    assert songs[0]["artists"] == ["周杰伦"]
+    assert songs[0]["album"] == "十一月的萧邦"
+    assert songs[0]["duration_ms"] == 227000
+    assert songs[0]["time"] == 1700000123
+
+
+def test_recent_songs_empty_list():
+    c = _client(lambda path, **params: {"code": 200, "data": {"total": 0, "list": []}})
+    assert c.recent_songs(100) == []
+
+
+def test_recent_songs_error_code_raises():
+    c = _client(lambda path, **params: {"code": 301, "message": "未登录"})
     try:
         c.recent_songs()
-        assert False, "无最近播放歌单应抛异常"
+        assert False, "code!=200 应抛异常"
     except RuntimeError as e:
-        assert "最近播放" in str(e)
+        assert "code=301" in str(e)
+
+
+def test_recent_songs_request_error_raises():
+    c = _client(lambda path, **params: {"_request_error": True})
+    try:
+        c.recent_songs()
+        assert False, "请求错误应抛异常"
+    except RuntimeError as e:
+        assert "ncm-api" in str(e)
 
 
 # ---- ncm_music_host 直连开关 ----
