@@ -69,6 +69,21 @@ def test_subsonic_list_playlists(monkeypatch):
     assert [p["id"] for p in pls] == ["1", "2"]
 
 
+def test_subsonic_list_playlists_new_format(monkeypatch):
+    """新版 Navidrome（OpenSubsonic）返回 playlists.playlist[] 结构。"""
+    c = SubsonicClient("http://mock", "u", "p")
+
+    def fake_get(url, params=None, timeout=None):
+        return _FakeResp({"playlists": {"playlist": [
+            {"id": "1", "name": "网易云日推-2026-08-22"},
+            {"id": "2", "name": "Weekly Jams"},
+        ]}})
+
+    monkeypatch.setattr("app.library.requests.get", fake_get)
+    pls = c.list_playlists()
+    assert [p["id"] for p in pls] == ["1", "2"]
+
+
 def test_subsonic_list_playlists_error(monkeypatch):
     c = SubsonicClient("http://mock", "u", "p")
     monkeypatch.setattr("app.library.requests.get",

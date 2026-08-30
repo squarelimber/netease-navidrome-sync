@@ -77,7 +77,11 @@ class SubsonicClient:
             if data.get("status") != "ok":
                 log.warning("Subsonic 歌单列表查询异常: %s", data.get("error"))
                 return []
-            return (data.get("playlist") or {}).get("children") or []
+            # 新版 Navidrome（OpenSubsonic 格式）返回 playlists.playlist[]，
+            # 旧版返回 playlist.children[]；两者都要兼容，否则列表恒为空、
+            # 过期歌单清理永远看不到 Navidrome 歌单。
+            node = data.get("playlists") or data.get("playlist") or {}
+            return node.get("playlist") or node.get("children") or []
         except Exception as e:
             log.warning("Subsonic 歌单列表查询失败: %s", e)
             return []
