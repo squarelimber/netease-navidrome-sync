@@ -74,6 +74,8 @@ class Jobs:
         self.youtube_cookie_status = {
             "state": "unchecked", "ok": None, "message": "尚未验证", "checked_at": None,
         }
+        # 手动"仅 Scrobble"按钮的最新结果（不写运行记录，仅供状态页展示）
+        self.last_manual_scrobble: dict | None = None
         self.engine = MusicDLEngine(
             cfg.dl_sources, cfg.data_dir / "tmp_dl",
             netease_cookie=cfg.netease_cookie,

@@ -17,14 +17,16 @@ from fastapi.responses import HTMLResponse, JSONResponse
 log = logging.getLogger(__name__)
 
 
-def _scrobble_status(last_stats: dict) -> str:
-    s = last_stats.get("scrobble", {})
+def _scrobble_status(s: dict) -> str:
     if not s:
         return ""
     if s.get("ok"):
         c = s.get("count", 0)
         return f'<span class="ok">✓ {c} 首</span>' if c else '<span class="muted">0 首</span>'
-    return '<span class="warn">✗ ' + (s.get("msg", "?") or "?")[:30] + '</span>'
+    detail = s.get("msg") or ""
+    if not detail and s.get("total") is not None:
+        detail = f'{s.get("count", 0)}/{s["total"]} 成功，{s.get("fail", 0)} 失败'
+    return '<span class="warn">✗ ' + (detail[:30] or "未知原因") + '</span>'
 
 
 PAGE = r"""<!DOCTYPE html>
@@ -790,6 +792,11 @@ def create_app(cfg, db, jobs, scheduler=None):
                 last_stats = json.loads(runs[0]["stats"]) if isinstance(runs[0]["stats"], str) else runs[0]["stats"]
             except Exception:
                 last_stats = {}
+        # 手动 scrobble 按钮的结果比上次每日任务更新时优先展示
+        scrobble_stats = last_stats.get("scrobble") or {}
+        manual = getattr(jobs, "last_manual_scrobble", None)
+        if manual and (not runs or manual.get("ts", 0) > (runs[0].get("started_at") or 0)):
+            scrobble_stats = manual.get("stats") or {}
         return {
             "cookie_ok": _live_cookie_ok(jobs),
             "youtube_cookie": jobs.youtube_cookie_status,
@@ -800,7 +807,7 @@ def create_app(cfg, db, jobs, scheduler=None):
             "running": jobs._lock.locked(),
             "aborted": jobs.aborted,
             "last_aborted": bool(last_stats.get("aborted")),
-            "scrobble": _scrobble_status(last_stats),
+            "scrobble": _scrobble_status(scrobble_stats),
         }
 
     @app.get("/api/stats")
@@ -860,6 +867,7 @@ def create_app(cfg, db, jobs, scheduler=None):
         try:
             jobs.refresh_cookie_status()
             stats = jobs._scrobble_recent() or {}
+            jobs.last_manual_scrobble = {"stats": stats, "ts": time.time()}
             return {"ok": True, **stats}
         except Exception as e:
             log.warning("手动 scrobble 异常: %s", e, exc_info=True)
