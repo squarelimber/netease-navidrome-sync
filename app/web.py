@@ -316,6 +316,7 @@ PAGE = r"""<!DOCTYPE html>
       <div class="actions">
         <button class="btn" id="run-btn" onclick="triggerRun()">立即运行</button>
         <button class="btn ghost" id="cleanup-btn" onclick="cleanupPlaylists()">清理过期歌单</button>
+        <button class="btn ghost" id="scrobble-btn" onclick="scrobbleOnly()">仅 Scrobble（测试）</button>
         <button class="btn danger hide" id="stop-btn" onclick="stopRun()">停止</button>
         <button class="btn ghost" id="refresh-btn" onclick="toggleRefresh()">暂停自动刷新</button>
       </div>
@@ -445,6 +446,7 @@ async function load() {
     ' &nbsp;·&nbsp; 推荐源 ' + (st.enabled_sources.join('、') || '无');
   document.getElementById('run-btn').disabled = st.running;
   document.getElementById('cleanup-btn').disabled = st.running;
+  document.getElementById('scrobble-btn').disabled = st.running;
   document.getElementById('stop-btn').classList.toggle('hide', !st.running);
   document.getElementById('run-state').textContent = st.running ? '正在下载…' : '';
 
@@ -509,6 +511,22 @@ async function cleanupPlaylists() {
     toast('清理请求失败', 'bad');
   } finally {
     btn.disabled = false; btn.textContent = '清理过期歌单';
+  }
+  setTimeout(load, 500);
+}
+async function scrobbleOnly() {
+  const btn = document.getElementById('scrobble-btn');
+  if (btn.disabled) return;
+  btn.disabled = true; btn.textContent = 'Scrobble 中…';
+  try {
+    const r = await (await fetch('/api/scrobble', {method:'POST'})).json();
+    if (r.ok) {
+      toast(`Scrobble 完成：成功 ${r.count||0} 首，失败 ${r.fail||0} 首（共 ${r.total||0} 条）`, r.fail ? 'warn' : 'ok');
+    } else toast(r.msg || 'Scrobble 失败', 'bad');
+  } catch(e) {
+    toast('Scrobble 请求失败', 'bad');
+  } finally {
+    btn.disabled = false; btn.textContent = '仅 Scrobble（测试）';
   }
   setTimeout(load, 500);
 }
@@ -830,6 +848,24 @@ def create_app(cfg, db, jobs, scheduler=None):
         except Exception as e:
             log.warning("手动清理歌单异常: %s", e, exc_info=True)
             return {"ok": False, "msg": str(e)}
+
+    @app.post("/api/scrobble")
+    def scrobble_recent():
+        """测试入口：仅执行 ListenBrainz → 网易云听歌回传，
+        不触发下载/建单。执行期间持有任务锁，防止与每日任务或
+        重复点击并发 scrobble（并发会导致网易云重复计数）。"""
+        if not jobs._lock.acquire(blocking=False):
+            return JSONResponse({"ok": False, "msg": "任务正在运行中，请结束后再试"},
+                                 status_code=409)
+        try:
+            jobs.refresh_cookie_status()
+            stats = jobs._scrobble_recent() or {}
+            return {"ok": True, **stats}
+        except Exception as e:
+            log.warning("手动 scrobble 异常: %s", e, exc_info=True)
+            return {"ok": False, "msg": str(e)}
+        finally:
+            jobs._lock.release()
 
     @app.post("/api/ytdlp-cookie/check")
     def check_ytdlp_cookie():
