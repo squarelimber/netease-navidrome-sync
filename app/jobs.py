@@ -466,6 +466,8 @@ class Jobs:
                 if not hit:
                     fail += 1
                     pending.add(listen_key)
+                    log.info("打卡失败: %s - %s（搜索无匹配，下次重试）",
+                             l["artist"], l["title"])
                     continue
                 time_ms = l.get("duration_ms", 180000) or 180000
                 self.scrobble_limiter.wait()
@@ -473,15 +475,20 @@ class Jobs:
                     success += 1
                     songs.append({"ncm_id": hit["id"], "artist": l["artist"],
                                   "title": l["title"]})
+                    log.info("打卡成功: %s - %s (ncm_id=%s)",
+                             l["artist"], l["title"], hit["id"])
                     if l["listened_at"] > max_ts:
                         max_ts = l["listened_at"]
                 else:
                     fail += 1
                     pending.add(listen_key)
+                    log.info("打卡失败: %s - %s（网易云返回非 200，下次重试）",
+                             l["artist"], l["title"])
                     continue
                 pending.discard(listen_key)
             except Exception as e:
-                log.debug("听歌打卡失败 %s - %s: %s", l["artist"], l["title"], e)
+                log.info("打卡失败: %s - %s（%s: %s，下次重试）",
+                         l["artist"], l["title"], type(e).__name__, e)
                 fail += 1
                 pending.add(listen_key)
 
