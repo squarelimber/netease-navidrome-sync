@@ -330,8 +330,10 @@ class NCMAPIClient:
     def scrobble(self, song_id: int, time_ms: int = 180000) -> bool:
         """写入听歌记录（最近播放 + 听歌排行计数）。
 
-        优先直连 music.163.com 的 /weapi/feedback/weblog（weapi 加密），绕开
-        ncm-api 转发的 clientlog3.music.163.com（后者常被 403/TLS 拒连）。
+        time_ms 为播放时长（毫秒），内部换算成秒写入 weblog（网易云只认秒，
+        传毫秒会被当非法时长静默丢弃：返回 200 但不记录）。
+        优先直连 music.163.com 的 /weapi/feedback/weblog（weapi 加密），
+        先发 startplay 再发 playend 并带 mainsite 字段（完整 payload 才会被记录）。
         无 Cookie 或 pycryptodome 缺失时回退到 ncm-api /scrobble。
         """
         if self._cookie and _HAS_CRYPTO and self.music_host:
@@ -342,23 +344,9 @@ class NCMAPIClient:
                 log.debug("直连 scrobble 失败，回退 ncm-api: %s", type(e).__name__)
         return self._scrobble_via_ncm(song_id, time_ms)
 
-    def _scrobble_direct(self, song_id: int, time_ms: int) -> bool:
-        """直连 music.163.com/weapi/feedback/weblog（weapi 加密）。"""
-        body = {
-            "logs": json.dumps([{
-                "action": "play",
-                "json": {
-                    "download": 0,
-                    "end": "playend",
-                    "id": song_id,
-                    "sourceId": song_id,
-                    "time": time_ms,
-                    "type": "song",
-                    "wifi": 0,
-                    "source": "list",
-                },
-            }], ensure_ascii=False),
-        }
+    def _weblog_post(self, logs_obj: list) -> bool:
+        """POST 一次 /weapi/feedback/weblog（weapi 加密），返回 code==200。"""
+        body = {"logs": json.dumps(logs_obj, ensure_ascii=False)}
         payload = _weapi_encrypt(body, self._cookie)
         r = self.session.post(
             f"{self.music_host}/weapi/feedback/weblog",
@@ -370,7 +358,33 @@ class NCMAPIClient:
         r.raise_for_status()
         return r.json().get("code") == 200
 
+    def _scrobble_direct(self, song_id: int, time_ms: int) -> bool:
+        """直连 music.163.com/weapi/feedback/weblog（weapi 加密）。
+
+        网易云只记录完整 payload 的打卡：先发 startplay、再发 playend，
+        两条都带 mainsite/mainsiteWeb/content 字段，time 用秒。
+        缺 startplay 或 mainsite 字段、或 time 用毫秒，都会返回 200 但不记录。
+        """
+        song = str(song_id)
+        content = f"id={song_id}"
+        play_seconds = max(int(time_ms) // 1000, 1)
+        ok_start = self._weblog_post([{
+            "action": "startplay",
+            "json": {"id": song, "type": "song", "mainsite": "1",
+                     "mainsiteWeb": "1", "content": content},
+        }])
+        time.sleep(1)
+        ok_play = self._weblog_post([{
+            "action": "play",
+            "json": {"download": 0, "end": "playend", "id": song,
+                     "sourceId": song, "time": play_seconds, "type": "song",
+                     "wifi": 0, "source": "list", "mainsite": "1",
+                     "mainsiteWeb": "1", "content": content},
+        }])
+        return ok_start and ok_play
+
     def _scrobble_via_ncm(self, song_id: int, time_ms: int) -> bool:
-        """经 ncm-api 回传（保留原重试逻辑，作为直连兜底）。"""
-        j = self._get_retry("/scrobble", id=song_id, sourceid=song_id, time=time_ms)
+        """经 ncm-api 回传（保留原重试逻辑，作为直连兜底）。time 用秒。"""
+        play_seconds = max(int(time_ms) // 1000, 1)
+        j = self._get_retry("/scrobble", id=song_id, sourceid=song_id, time=play_seconds)
         return j.get("code") == 200

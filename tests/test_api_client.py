@@ -135,8 +135,8 @@ def test_weapi_encrypt_csrf_token_in_plaintext():
     assert a["encSecKey"] == b["encSecKey"]  # 同一 secret key → 同一 encSecKey
 
 
-def test_scrobble_direct_posts_music163():
-    calls = {}
+def test_scrobble_direct_posts_music163(monkeypatch):
+    posts = []
 
     class _Resp:
         def raise_for_status(self):
@@ -146,20 +146,52 @@ def test_scrobble_direct_posts_music163():
             return {"code": 200}
 
     def fake_post(url, data=None, headers=None, timeout=None):
-        calls["url"] = url
-        calls["data"] = data
-        calls["headers"] = headers
+        posts.append({"url": url, "data": data, "headers": headers})
         return _Resp()
 
+    monkeypatch.setattr("app.api_client.time.sleep", lambda _: None)
     c = NCMAPIClient("http://mock")
     c._cookie = "MUSIC_U=abc; _csrf=CSRF123"
     c.session.post = fake_post
     assert c._scrobble_direct(123, 180000) is True
-    # weapi 请求必须发到 /weapi/ 前缀 URL
-    assert calls["url"] == "https://music.163.com/weapi/feedback/weblog"
-    assert calls["headers"]["Cookie"] == "MUSIC_U=abc; _csrf=CSRF123"
-    assert set(calls["data"]) == {"params", "encSecKey"}
-    base64.b64decode(calls["data"]["params"], validate=True)  # params 为合法 base64 密文
+    # 完整打卡 = startplay + playend 两次 weapi 请求
+    assert len(posts) == 2
+    for p in posts:
+        assert p["url"] == "https://music.163.com/weapi/feedback/weblog"
+        assert p["headers"]["Cookie"] == "MUSIC_U=abc; _csrf=CSRF123"
+        assert set(p["data"]) == {"params", "encSecKey"}
+        base64.b64decode(p["data"]["params"], validate=True)  # 合法 base64 密文
+
+
+def test_scrobble_direct_payload_structure(monkeypatch):
+    """startplay + playend 两条，playend 带 mainsite 字段且 time 用秒。"""
+    monkeypatch.setattr("app.api_client.time.sleep", lambda _: None)
+    captured = []
+
+    def fake_weblog(logs_obj):
+        captured.append(logs_obj)
+        return True
+
+    c = NCMAPIClient("http://mock")
+    c._cookie = "MUSIC_U=abc"
+    c._weblog_post = fake_weblog
+    assert c._scrobble_direct(3387791686, 196821) is True
+    assert len(captured) == 2
+    start, play = captured
+    # startplay
+    assert start[0]["action"] == "startplay"
+    assert start[0]["json"]["id"] == "3387791686"
+    assert start[0]["json"]["mainsite"] == "1"
+    assert start[0]["json"]["mainsiteWeb"] == "1"
+    assert start[0]["json"]["content"] == "id=3387791686"
+    # playend：time 用秒（196821ms -> 196s），带 mainsite 字段
+    assert play[0]["action"] == "play"
+    assert play[0]["json"]["end"] == "playend"
+    assert play[0]["json"]["time"] == 196
+    assert play[0]["json"]["mainsite"] == "1"
+    assert play[0]["json"]["mainsiteWeb"] == "1"
+    assert play[0]["json"]["content"] == "id=3387791686"
+    assert play[0]["json"]["source"] == "list"
 
 
 def test_scrobble_prefers_direct_when_cookie_set():
@@ -291,7 +323,9 @@ def test_empty_music_host_disables_direct_scrobble():
     assert ncm == ["/scrobble"]  # 直连被禁用，直接走 ncm-api
 
 
-def test_custom_music_host_used_in_scrobble_urls():
+def test_custom_music_host_used_in_scrobble_urls(monkeypatch):
+    monkeypatch.setattr("app.api_client.time.sleep", lambda _: None)
+
     class _Resp:
         def raise_for_status(self):
             pass
@@ -309,4 +343,8 @@ def test_custom_music_host_used_in_scrobble_urls():
 
     c.session.post = fake_post
     assert c._scrobble_direct(123, 180000) is True
-    assert urls == ["http://192.168.0.120:3000/weapi/feedback/weblog"]
+    # startplay + playend 两次，都走自定义 music_host
+    assert urls == [
+        "http://192.168.0.120:3000/weapi/feedback/weblog",
+        "http://192.168.0.120:3000/weapi/feedback/weblog",
+    ]
