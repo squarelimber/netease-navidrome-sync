@@ -14,6 +14,7 @@ import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from .db import SCROBBLE_TS_KEY
 from .matcher import best_match
 from .sources.base import Track
 from .sources.listenbrainz import get_recent_listens
@@ -323,6 +324,7 @@ PAGE = r"""<!DOCTYPE html>
         <button class="btn" id="run-btn" onclick="triggerRun()">立即运行</button>
         <button class="btn ghost" id="cleanup-btn" onclick="cleanupPlaylists()">清理过期歌单</button>
         <button class="btn ghost" id="scrobble-btn" onclick="scrobbleOnly()">仅 Scrobble（测试）</button>
+        <button class="btn ghost" id="reset-wm-btn" onclick="resetWatermark()">重置 Scrobble 水位</button>
         <button class="btn ghost" onclick="showRecent()">最近播放核对</button>
         <button class="btn danger hide" id="stop-btn" onclick="stopRun()">停止</button>
         <button class="btn ghost" id="refresh-btn" onclick="toggleRefresh()">暂停自动刷新</button>
@@ -539,6 +541,21 @@ async function scrobbleOnly() {
     toast('Scrobble 请求失败', 'bad');
   } finally {
     btn.disabled = false; btn.textContent = '仅 Scrobble（测试）';
+  }
+  setTimeout(load, 500);
+}
+async function resetWatermark() {
+  if (!confirm('把 scrobble 水位重置为 0？\n\n下次运行会重新打卡全部 ListenBrainz 播放（含已打卡过的，重复打卡只会刷新最近播放时间）。\n\n用于补录早期 scrobble 失效时被跳过的积压播放。')) return;
+  const btn = document.getElementById('reset-wm-btn');
+  btn.disabled = true; btn.textContent = '重置中…';
+  try {
+    const r = await (await fetch('/api/scrobble/reset-watermark', {method:'POST'})).json();
+    if (r.ok) { toast('Scrobble 水位已重置，点「仅 Scrobble」开始补录', 'ok'); }
+    else toast(r.msg || '重置失败', 'bad');
+  } catch(e) {
+    toast('重置请求失败', 'bad');
+  } finally {
+    btn.disabled = false; btn.textContent = '重置 Scrobble 水位';
   }
   setTimeout(load, 500);
 }
@@ -925,6 +942,27 @@ def create_app(cfg, db, jobs, scheduler=None):
             return {"ok": True, **stats}
         except Exception as e:
             log.warning("手动 scrobble 异常: %s", e, exc_info=True)
+            return {"ok": False, "msg": str(e)}
+        finally:
+            jobs._lock.release()
+
+    @app.post("/api/scrobble/reset-watermark")
+    def reset_scrobble_watermark():
+        """把 scrobble 水位重置为 0，让下次运行重新打卡全部 ListenBrainz 播放。
+
+        用于补录因早期 scrobble 失效（payload 不完整/时间单位错）而被跳过的积压播放。
+        执行期间持有任务锁，避免与正在运行的 scrobble 并发写水位。"""
+        if not jobs._lock.acquire(blocking=False):
+            return JSONResponse({"ok": False, "msg": "任务正在运行中，请结束后再试"},
+                                 status_code=409)
+        try:
+            prev = db.get_property(SCROBBLE_TS_KEY, "0")
+            db.set_property(SCROBBLE_TS_KEY, "0")
+            log.info("scrobble 水位已重置: %s -> 0", prev)
+            return {"ok": True, "prev": prev,
+                    "msg": f"水位已重置（原 {int(float(prev)) if prev else 0}）"}
+        except Exception as e:
+            log.warning("重置 scrobble 水位异常: %s", e, exc_info=True)
             return {"ok": False, "msg": str(e)}
         finally:
             jobs._lock.release()
