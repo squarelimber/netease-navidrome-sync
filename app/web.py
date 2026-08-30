@@ -75,6 +75,7 @@ PAGE = r"""<!DOCTYPE html>
   .dot { width:7px; height:7px; border-radius:50%; flex:0 0 auto; }
   .dot-on { background:var(--ok); box-shadow:0 0 0 3px rgba(132,169,140,.14); }
   .dot-off { background:transparent; border:1.5px solid var(--bad); }
+  .dot-warn { background:transparent; border:1.5px solid var(--warn); }
   .top-actions { display:flex; align-items:center; gap:16px; }
   .txt-btn { background:none; border:0; cursor:pointer; font:12px/1 var(--mono);
     color:var(--dim); letter-spacing:1px; padding:6px 2px; border-bottom:1px solid transparent;
@@ -278,6 +279,7 @@ PAGE = r"""<!DOCTYPE html>
   </div>
   <div class="topbar-right">
     <span id="ck-pill" class="ck"><span class="dot dot-off" id="ck-dot"></span><span id="ck-txt">检查中…</span></span>
+    <span id="yt-pill" class="ck"><span class="dot dot-warn" id="yt-dot"></span><span id="yt-txt">YouTube —</span><button class="txt-btn" onclick="checkYoutubeCookie()">验证</button></span>
     <div class="top-actions">
       <button class="txt-btn hide" id="login-btn" onclick="openGate()">登录</button>
       <button class="txt-btn" onclick="showConfig()">设置</button>
@@ -432,14 +434,15 @@ async function load() {
   document.getElementById('rail-last').textContent = fmt(st.last_run);
   document.getElementById('scrobble-line').innerHTML = st.scrobble ? '上次 scrobble ' + st.scrobble : '';
   const yt = st.youtube_cookie || { state:'unchecked' };
-  const ytCls = yt.state === 'valid' ? 'ok' : (yt.state === 'invalid' || yt.state === 'missing' ? 'bad' : 'warn');
-  const ytLabel = { valid:'有效', invalid:'失效', missing:'未配置', unknown:'未知', unchecked:'未验证' }[yt.state] || '未验证';
-  const ytTime = yt.checked_at ? ' · ' + fmt(yt.checked_at) : '';
+  const ytDotCls = { valid:'dot-on', invalid:'dot-off', missing:'dot-off', unknown:'dot-warn', unchecked:'dot-warn' }[yt.state] || 'dot-warn';
+  const ytLabel = { valid:'YouTube 有效', invalid:'YouTube 失效', missing:'YouTube 未配置', unknown:'YouTube 未知', unchecked:'YouTube 未验证' }[yt.state] || 'YouTube 未验证';
+  document.getElementById('yt-dot').className = 'dot ' + ytDotCls;
+  document.getElementById('yt-txt').textContent = ytLabel;
+  document.getElementById('yt-pill').title =
+    [yt.message, yt.checked_at ? '上次检查 ' + fmt(yt.checked_at) : ''].filter(Boolean).join('\n');
   document.getElementById('sysline').innerHTML =
     '源链 ' + (st.dl_sources.join(' → ')) +
-    ' &nbsp;·&nbsp; 推荐源 ' + (st.enabled_sources.join('、') || '无') +
-    ' &nbsp;·&nbsp; YouTube Cookie <span class="' + ytCls + '" title="' + (yt.message || '') + '">' + ytLabel + ytTime + '</span> ' +
-    '<button class="txt-btn" onclick="checkYoutubeCookie()">验证</button>';
+    ' &nbsp;·&nbsp; 推荐源 ' + (st.enabled_sources.join('、') || '无');
   document.getElementById('run-btn').disabled = st.running;
   document.getElementById('cleanup-btn').disabled = st.running;
   document.getElementById('stop-btn').classList.toggle('hide', !st.running);
