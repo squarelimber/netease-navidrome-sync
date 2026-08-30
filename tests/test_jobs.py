@@ -255,3 +255,17 @@ def test_cleanup_keeps_current_and_user_playlists(tmp_path):
 
     assert sub.deleted == []
     assert db.deleted == []
+
+
+def test_cleanup_returns_stats_for_web_button(tmp_path):
+    """手动清理按钮依赖的返回值：候选数 / Navidrome 删除数 / 文件删除数。"""
+    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+    stale = f"网易云日推-{old}"
+    discover = tmp_path / "Discover"
+    discover.mkdir()
+    (discover / f"{stale}.m3u8").write_text("#EXTM3U", encoding="utf-8")
+    sub = _FakeSubsonic([{"id": "1", "name": stale}])
+    db = _FakeDB({stale})
+    stats = _cleanup_fn(tmp_path, db, sub)()
+
+    assert stats == {"candidates": 1, "navi_deleted": 1, "files_deleted": 1}

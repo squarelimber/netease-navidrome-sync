@@ -369,6 +369,8 @@ class Jobs:
                 log.warning("删除过期歌单文件失败 %s: %s", target, e)
         log.info("已清理过期自动歌单 %d 个（Navidrome 歌单删除 %d，歌单文件删除 %d，音频文件保留）",
                  len(candidates), navi_deleted, removed_files)
+        return {"candidates": len(candidates), "navi_deleted": navi_deleted,
+                "files_deleted": removed_files}
 
     def _aggregate_discover(self, tracks: list[Track]) -> list[Track]:
         """聚合推荐源曲目 -> 每日发现歌单。

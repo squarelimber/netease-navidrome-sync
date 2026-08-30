@@ -313,6 +313,7 @@ PAGE = r"""<!DOCTYPE html>
       <div class="faint num sysline" id="sysline"></div>
       <div class="actions">
         <button class="btn" id="run-btn" onclick="triggerRun()">立即运行</button>
+        <button class="btn ghost" id="cleanup-btn" onclick="cleanupPlaylists()">清理过期歌单</button>
         <button class="btn danger hide" id="stop-btn" onclick="stopRun()">停止</button>
         <button class="btn ghost" id="refresh-btn" onclick="toggleRefresh()">暂停自动刷新</button>
       </div>
@@ -440,6 +441,7 @@ async function load() {
     ' &nbsp;·&nbsp; YouTube Cookie <span class="' + ytCls + '" title="' + (yt.message || '') + '">' + ytLabel + ytTime + '</span> ' +
     '<button class="txt-btn" onclick="checkYoutubeCookie()">验证</button>';
   document.getElementById('run-btn').disabled = st.running;
+  document.getElementById('cleanup-btn').disabled = st.running;
   document.getElementById('stop-btn').classList.toggle('hide', !st.running);
   document.getElementById('run-state').textContent = st.running ? '正在下载…' : '';
 
@@ -490,6 +492,22 @@ async function stopRun() {
   if (r.ok) toast('已请求中止（下一首曲目前生效）', 'warn');
   else toast(r.msg || '操作失败', 'bad');
   setTimeout(load, 2000);
+}
+async function cleanupPlaylists() {
+  const btn = document.getElementById('cleanup-btn');
+  if (btn.disabled) return;
+  btn.disabled = true; btn.textContent = '清理中…';
+  try {
+    const r = await (await fetch('/api/cleanup-playlists', {method:'POST'})).json();
+    if (r.ok) {
+      toast(`已清理：Navidrome 歌单 ${r.navi_deleted||0} 个，歌单文件 ${r.files_deleted||0} 个（音频保留）`, 'ok');
+    } else toast(r.msg || '清理失败', 'bad');
+  } catch(e) {
+    toast('清理请求失败', 'bad');
+  } finally {
+    btn.disabled = false; btn.textContent = '清理过期歌单';
+  }
+  setTimeout(load, 500);
 }
 function toggleRefresh() {
   autoRefresh = !autoRefresh;
@@ -795,6 +813,20 @@ def create_app(cfg, db, jobs, scheduler=None):
             return JSONResponse({"ok": False, "msg": "当前没有运行中的任务"}, status_code=409)
         jobs.stop()
         return {"ok": True}
+
+    @app.post("/api/cleanup-playlists")
+    def cleanup_playlists():
+        """手动清理过期自动歌单（Navidrome + 本地 m3u8 + 数据库关联），
+        不触发完整每日同步。音频文件不受影响。"""
+        if jobs._lock.locked():
+            return JSONResponse({"ok": False, "msg": "任务正在运行中，请结束后再清理"},
+                                status_code=409)
+        try:
+            stats = jobs._cleanup_old_playlists() or {}
+            return {"ok": True, **stats}
+        except Exception as e:
+            log.warning("手动清理歌单异常: %s", e, exc_info=True)
+            return {"ok": False, "msg": str(e)}
 
     @app.post("/api/ytdlp-cookie/check")
     def check_ytdlp_cookie():
