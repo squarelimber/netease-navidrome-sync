@@ -203,6 +203,26 @@ def test_recent_songs_wrapped_song():
     assert songs[0]["time"] == 1700000123
 
 
+def test_recent_songs_real_structure():
+    """线上真实结构：{resourceId, playTime, resourceType, data:{歌曲}, banned, multiTerminalInfo}。"""
+    def fake_get(path, **params):
+        return {"code": 200, "data": {"total": 1, "list": [
+            {"resourceId": 3, "playTime": 1700000456000, "resourceType": "song",
+             "data": {"id": 3, "name": "青花瓷", "ar": [{"name": "周杰伦"}],
+                      "al": {"name": "我很忙"}, "dt": 231000},
+             "banned": False, "multiTerminalInfo": {}},
+        ]}}
+
+    c = _client(fake_get)
+    songs = c.recent_songs(10)
+    assert songs[0]["id"] == 3
+    assert songs[0]["title"] == "青花瓷"
+    assert songs[0]["artists"] == ["周杰伦"]
+    assert songs[0]["album"] == "我很忙"
+    assert songs[0]["duration_ms"] == 231000
+    assert songs[0]["time"] == 1700000456  # playTime 毫秒 → 秒
+
+
 def test_recent_songs_empty_list():
     c = _client(lambda path, **params: {"code": 200, "data": {"total": 0, "list": []}})
     assert c.recent_songs(100) == []

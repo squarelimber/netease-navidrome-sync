@@ -235,15 +235,22 @@ class NCMAPIClient:
 
     @staticmethod
     def _norm_recent_song(item: dict) -> dict:
-        """归一化『最近播放』条目，兼容直接结构与 {song:{...}} 包裹结构。"""
-        s = item.get("song") if isinstance(item.get("song"), dict) else item
+        """归一化『最近播放』条目。
+
+        真实结构：{resourceId, playTime, resourceType, data:{歌曲详情}, banned,
+        multiTerminalInfo}。歌曲详情在 data 内，兼容 data 再包一层 song 的情况，
+        也兼容直接结构（id/name/ar/al/dt）作为兜底。
+        """
+        s = item.get("data") if isinstance(item.get("data"), dict) else item
+        if isinstance(s.get("song"), dict):
+            s = s["song"]
         artists = s.get("artists") or s.get("ar") or []
         album = s.get("album") or s.get("al") or {}
-        t = item.get("time") or s.get("time") or 0
+        t = item.get("playTime") or item.get("time") or s.get("time") or 0
         if isinstance(t, (int, float)) and t > 1e12:  # 毫秒 → 秒
             t = t / 1000
         return {
-            "id": s.get("id"),
+            "id": item.get("resourceId") or s.get("id"),
             "title": s.get("name", ""),
             "artists": [a.get("name", "") for a in artists],
             "album": album.get("name", "") if isinstance(album, dict) else str(album or ""),
@@ -267,8 +274,15 @@ class NCMAPIClient:
         data = j.get("data") or {}
         songs = data.get("list") or []
         if songs:
-            log.info("最近播放核对: total=%s 首条keys=%s",
-                     data.get("total"), list(songs[0].keys()))
+            first = songs[0]
+            inner = first.get("data")
+            log.info("最近播放核对: total=%s 条目keys=%s data_keys=%s",
+                     data.get("total"), list(first.keys()),
+                     list(inner.keys()) if isinstance(inner, dict) else type(inner).__name__)
+            norm0 = self._norm_recent_song(first)
+            log.info("最近播放核对: 首条解析 id=%s title=%r artists=%s duration_ms=%s time=%s",
+                     norm0["id"], norm0["title"], norm0["artists"],
+                     norm0["duration_ms"], norm0["time"])
         return [self._norm_recent_song(s) for s in songs[:limit]]
 
     # ------- 账号 -------
