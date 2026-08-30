@@ -206,10 +206,52 @@ def test_cleanup_without_subsonic(tmp_path):
     assert db.deleted == [stale]
 
 
-def test_cleanup_no_candidates_skips_api(tmp_path):
+def test_cleanup_no_local_candidates_still_scans_navidrome(tmp_path):
+    """无本地过期记录时仍扫描 Navidrome（为清理孤儿歌单）；无孤儿则不删任何东西。"""
     sub = _FakeSubsonic([{"id": "1", "name": "whatever"}])
     db = _FakeDB(set())
     fn = _cleanup_fn(tmp_path, db, sub)()
 
-    assert getattr(sub, "listed", False) is False  # 无过期歌单时不调用 API
+    assert getattr(sub, "listed", False) is True   # 仍会扫描 Navidrome
+    assert sub.deleted == []
+    assert db.deleted == []
+
+
+def test_cleanup_removes_orphaned_navidrome_playlist(tmp_path):
+    """本地记录已清、Navidrome 残留的孤儿歌单：下次运行仍能删掉。"""
+    old = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+    orphan = f"网易云日推-{old}"
+    sub = _FakeSubsonic([{"id": "7", "name": orphan}])
+    db = _FakeDB(set())   # 本地无任何记录（文件与数据库均已清理）
+    fn = _cleanup_fn(tmp_path, db, sub)()
+
+    assert sub.deleted == ["7"]
+    assert db.deleted == []
+
+
+def test_cleanup_orphan_name_with_extension(tmp_path):
+    """孤儿歌单名带 .m3u8 扩展名（Navidrome 导入时保留）也能识别删除。"""
+    old = (datetime.date.today() - datetime.timedelta(days=5)).isoformat()
+    orphan = f"每日发现-{old}"
+    sub = _FakeSubsonic([{"id": "8", "name": f"{orphan}.m3u8"}])
+    db = _FakeDB(set())
+    fn = _cleanup_fn(tmp_path, db, sub)()
+
+    assert sub.deleted == ["8"]
+
+
+def test_cleanup_keeps_current_and_user_playlists(tmp_path):
+    """未过期的自动歌单与用户自建歌单一律不动。"""
+    today = datetime.date.today().isoformat()
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    sub = _FakeSubsonic([
+        {"id": "1", "name": f"每日发现-{today}"},      # 今天，保留
+        {"id": "2", "name": f"网易云日推-{yesterday}"},  # 保留期（3天）内，保留
+        {"id": "3", "name": "我喜欢的音乐"},
+        {"id": "4", "name": "Weekly Jams"},
+    ])
+    db = _FakeDB(set())
+    fn = _cleanup_fn(tmp_path, db, sub)()
+
+    assert sub.deleted == []
     assert db.deleted == []

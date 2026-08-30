@@ -51,6 +51,19 @@ def _automatic_playlist_date(name: str) -> datetime.date | None:
     return None
 
 
+def _navidrome_auto_playlist_date(name: str) -> datetime.date | None:
+    """从 Navidrome 歌单名解析自动歌单日期。
+
+    Navidrome 导入 m3u8 时歌单名可能带扩展名或改动空格，先归一再匹配。
+    """
+    base = str(name or "").strip()
+    for suffix in (".m3u8", ".m3u"):
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)]
+    base = "".join(base.split())
+    return _automatic_playlist_date(base)
+
+
 class Jobs:
     def __init__(self, cfg, db: DB):
         self.cfg = cfg
@@ -300,7 +313,11 @@ class Jobs:
                 log.error("生成歌单文件失败 %s: %s", playlist, e)
 
     def _cleanup_old_playlists(self):
-        """删除过期的自动推荐歌单（Navidrome API + 本地文件 + 数据库关联），保留音频文件。"""
+        """删除过期的自动推荐歌单（Navidrome + 本地文件 + 数据库关联），保留音频文件。
+
+        Navidrome 侧独立扫描：歌单名符合自动歌单命名且日期过期即删除，
+        不依赖本地文件/数据库记录是否存在，孤儿歌单可自愈。
+        """
         retention = max(1, int(getattr(self.cfg, "playlist_retention_days", 3)))
         cutoff = datetime.date.today() - datetime.timedelta(days=retention - 1)
         discover_dir = self.cfg.music_dir / DISCOVER_DIR
@@ -320,18 +337,25 @@ class Jobs:
                     continue
                 if file_date < cutoff:
                     candidates.add(path.stem)
-        if not candidates:
-            return
 
         # Navidrome 自动导入的 m3u8 歌单，源文件删除后不会自动消失，需要显式调 API 删掉。
+        # 独立扫描（不依赖上面的 candidates）：本地文件/数据库记录先被清掉后
+        # （或早期版本未删 Navidrome 歌单留下的孤儿），按歌单名识别过期自动
+        # 歌单仍能删掉，下次运行自动收敛。
         navi_deleted = 0
         if self.subsonic:
             wanted = {SubsonicClient._norm(name) for name in candidates}
             for pl in self.subsonic.list_playlists():
                 pid = pl.get("id")
-                if pid and SubsonicClient._norm(pl.get("name", "")) in wanted:
-                    if self.subsonic.delete_playlist(pid):
-                        navi_deleted += 1
+                if not pid:
+                    continue
+                name = pl.get("name", "")
+                expired = SubsonicClient._norm(name) in wanted
+                if not expired:
+                    d = _navidrome_auto_playlist_date(name)
+                    expired = bool(d and d < cutoff)
+                if expired and self.subsonic.delete_playlist(pid):
+                    navi_deleted += 1
 
         removed_files = 0
         for playlist in sorted(candidates):
