@@ -68,7 +68,7 @@ class Jobs:
     def __init__(self, cfg, db: DB):
         self.cfg = cfg
         self.db = db
-        self.ncm = NCMAPIClient(cfg.ncm_api_url)
+        self.ncm = NCMAPIClient(cfg.ncm_api_url, cfg.ncm_music_host)
         self.last_cookie_ok: bool | None = None
         self.last_cookie_check_at = 0.0
         self.youtube_cookie_status = {

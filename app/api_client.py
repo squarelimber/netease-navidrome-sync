@@ -62,8 +62,10 @@ def _weapi_encrypt(data: dict) -> dict:
 
 
 class NCMAPIClient:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, music_host: str | None = None):
         self.base_url = base_url.rstrip("/")
+        # 网易云直连 host；空串表示禁用直连路径（容器无法访问公网时只走 ncm-api）
+        self.music_host = _MUSIC_HOST if music_host is None else music_host
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "navidrome-sync/0.1"})
         self._cookie = ""
@@ -237,15 +239,17 @@ class NCMAPIClient:
         返回 [{id, title, artists, album, duration_ms, time}, ...]，
         time 为播放的 Unix 时间戳（秒）。Cookie 缺失或网易云拒绝时抛异常。
         """
+        if not self.music_host:
+            raise RuntimeError("网易云直连已禁用（ncm_music_host 为空）")
         if not self._cookie:
             raise RuntimeError("网易云 Cookie 未设置")
         if not _HAS_CRYPTO:
             raise RuntimeError("缺少 pycryptodome，无法直连网易云")
         payload = _weapi_encrypt({"limit": limit, "offset": 0, "total": True})
         r = self.session.post(
-            f"{_MUSIC_HOST}/api/song/list/recent",
+            f"{self.music_host}/api/song/list/recent",
             data=payload,
-            headers={"User-Agent": "Mozilla/5.0", "Referer": _MUSIC_HOST + "/",
+            headers={"User-Agent": "Mozilla/5.0", "Referer": self.music_host + "/",
                      "Cookie": self._cookie},
             timeout=TIMEOUT,
         )
@@ -297,7 +301,7 @@ class NCMAPIClient:
         ncm-api 转发的 clientlog3.music.163.com（后者常被 403/TLS 拒连）。
         无 Cookie 或 pycryptodome 缺失时回退到 ncm-api /scrobble。
         """
-        if self._cookie and _HAS_CRYPTO:
+        if self._cookie and _HAS_CRYPTO and self.music_host:
             try:
                 if self._scrobble_direct(song_id, time_ms):
                     return True
@@ -326,9 +330,9 @@ class NCMAPIClient:
         }
         payload = _weapi_encrypt(body)
         r = self.session.post(
-            f"{_MUSIC_HOST}/api/feedback/weblog",
+            f"{self.music_host}/api/feedback/weblog",
             data=payload,
-            headers={"User-Agent": "Mozilla/5.0", "Referer": _MUSIC_HOST + "/",
+            headers={"User-Agent": "Mozilla/5.0", "Referer": self.music_host + "/",
                      "Cookie": self._cookie},
             timeout=TIMEOUT,
         )

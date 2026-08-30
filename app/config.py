@@ -36,6 +36,7 @@ class Config:
     data_dir: Path
     navidrome: NavidromeCfg
     ncm_api_url: str
+    ncm_music_host: str
     netease_cookie: str
     cookie_file: Path
     sources: dict  # name -> SourceCfg
@@ -108,6 +109,8 @@ def load() -> Config:
         data_dir=data_dir,
         navidrome=navidrome,
         ncm_api_url=str(raw.get("ncm_api_url", "http://ncm-api:3000")),
+        # 留空表示禁用直连路径（容器无法访问公网时），只走 ncm-api 回传
+        ncm_music_host=str(raw.get("ncm_music_host", "https://music.163.com")).rstrip("/"),
         netease_cookie=cookie,
         cookie_file=cookie_file,
         sources=sources,

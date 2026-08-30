@@ -216,3 +216,50 @@ def test_recent_songs_error_code_raises():
         assert False, "非 200 code 应抛异常"
     except RuntimeError as e:
         assert "301" in str(e)
+
+
+# ---- ncm_music_host 直连开关 ----
+
+def test_empty_music_host_disables_direct_scrobble():
+    c = NCMAPIClient("http://mock", music_host="")
+    c._cookie = "MUSIC_U=abc"
+    ncm = []
+
+    def fake_get(path, **params):
+        ncm.append(path)
+        return {"code": 200}
+
+    c._get = fake_get
+    assert c.scrobble(123) is True
+    assert ncm == ["/scrobble"]  # 直连被禁用，直接走 ncm-api
+
+
+def test_empty_music_host_disables_recent_songs():
+    c = NCMAPIClient("http://mock", music_host="")
+    c._cookie = "MUSIC_U=abc"
+    try:
+        c.recent_songs()
+        assert False, "直连禁用时应抛异常"
+    except RuntimeError as e:
+        assert "禁用" in str(e)
+
+
+def test_custom_music_host_used_in_urls():
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"code": 200, "list": []}
+
+    c = NCMAPIClient("http://mock", music_host="http://192.168.0.120:3000")
+    c._cookie = "MUSIC_U=abc"
+    urls = []
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        urls.append(url)
+        return _Resp()
+
+    c.session.post = fake_post
+    c.recent_songs(10)
+    assert urls == ["http://192.168.0.120:3000/api/song/list/recent"]
