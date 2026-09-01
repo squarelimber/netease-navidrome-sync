@@ -65,6 +65,21 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 # 我们限制为 320k(exhigh)/128k(standard) 的 mp3，控制体积。
 _MUSICDL_NETEASE_QUALITIES = ["exhigh", "standard"]
 
+# YouTube 候选标题含这些关键词即判为"非原曲"版本（BGM/纯音乐/伴奏等），跳过。
+# 这类视频基础标题匹配分照样很高，不过滤就会把纯 BGM 当成原曲下下来。
+# 注意：不含"纯享"——那是网易云音质标签（无损纯享=高音质版），不是 BGM。
+_BGM_KEYWORDS = (
+    "bgm", "纯音乐", "instrumental", "伴奏", "karaoke", "背景音乐",
+)
+
+# 下载后时长校验阈值：
+# - 比期望短 _DUR_TRUNCATE_RATIO 以上 → 判截断/预览片段，拒收
+# - 比期望长 _DUR_TOO_LONG_RATIO 以上 → 判错误视频（现场版/BGM 循环等），拒收
+# - 期望时长未知时，低于 _DUR_FLOOR_MS 的兜底拒收（绝大多数歌曲 > 40s）
+_DUR_TRUNCATE_RATIO = 0.8
+_DUR_TOO_LONG_RATIO = 1.5
+_DUR_FLOOR_MS = 40 * 1000
+
 
 def _patch_musicdl():
     """对 musicdl 做运行时校准（模块级补丁）。"""
@@ -204,6 +219,9 @@ class MusicDLEngine:
         elif isinstance(results, list):
             infos = results
         candidates = [self._norm_result(i, source) for i in infos]
+        # 过滤 BGM/纯音乐/伴奏等非原曲版本，避免把纯 BGM 当原曲下下来
+        candidates = [c for c in candidates
+                      if not any(kw in (c.get("name") or "").lower() for kw in _BGM_KEYWORDS)]
         hit = matcher.best_match(track, candidates, self.title_threshold, self.max_duration_diff)
         if not hit:
             log.info("源 %s 无有效匹配: %s", source, keyword)
@@ -230,13 +248,22 @@ class MusicDLEngine:
         return save_path
 
     def download(self, track) -> tuple[Path, str]:
-        """按源链尝试下载，返回 (文件路径, 命中的源)。全部失败抛 DownloadError。"""
+        """按源链尝试下载，返回 (文件路径, 命中的源)。全部失败抛 DownloadError。
+
+        每个源的产物都过一遍时长校验：截断/预览片段、明显错误视频会被拒收，
+        删除产物后落下一源，避免坏文件入库。
+        """
         for source in self.sources:
             self.limiter.wait()
             log.info("尝试源 %s: %s - %s", source, "/".join(track.artists), track.title)
             path = self._download_from_source(track, source)
-            if path:
-                return path, source
+            if not path:
+                continue
+            if not self._validate_duration(path, track):
+                log.warning("源 %s 产物未通过时长校验，弃用并落下一源: %s", source, path.name)
+                path.unlink(missing_ok=True)
+                continue
+            return path, source
         raise DownloadError("所有下载源均失败")
 
     # ---------- yt-dlp 兜底源 ----------
@@ -359,6 +386,10 @@ class MusicDLEngine:
             title = (e.get("title") or "").strip()
             if not title:
                 continue
+            # 过滤 BGM/纯音乐/伴奏等非原曲版本（标题含关键词即跳过）
+            if any(kw in title.lower() for kw in _BGM_KEYWORDS):
+                log.info("yt-dlp 候选含 BGM/非原曲关键词，跳过: %s", title[:60])
+                continue
             # 拆 "歌手 - 歌名"；拆不出则整串参与标题匹配
             parts = re.split(r"\s*[-–—]\s*", title, maxsplit=1)
             if len(parts) == 2 and parts[0] and parts[1]:
@@ -382,6 +413,32 @@ class MusicDLEngine:
             return None
         best.sort(key=lambda x: x[0], reverse=True)
         return best[0][1]
+
+    def _validate_duration(self, path: Path, track) -> bool:
+        """下载后时长校验：拒收截断/预览片段和明显错误的视频。
+
+        - 期望时长已知：短于 80% 判截断、长于 150% 判错视频，均拒收；
+        - 期望时长未知：低于 40s 兜底拒收（绝大多数歌曲 > 40s）；
+        - 读不到时长时放行（不阻断，交给后续流程）。
+        """
+        real_ms = sniff_duration_ms(path)
+        if not real_ms:
+            return True
+        expected = track.duration_ms
+        if expected:
+            if real_ms < expected * _DUR_TRUNCATE_RATIO:
+                log.warning("时长过短(%ds < 期望 %ds 的 80%%)，判截断/预览，拒收: %s",
+                            real_ms // 1000, expected // 1000, path.name)
+                return False
+            if real_ms > expected * _DUR_TOO_LONG_RATIO:
+                log.warning("时长过长(%ds > 期望 %ds 的 150%%)，判错误视频，拒收: %s",
+                            real_ms // 1000, expected // 1000, path.name)
+                return False
+        elif real_ms < _DUR_FLOOR_MS:
+            log.warning("时长过短(%ds < 40s 下限)，疑似预览/片段，拒收: %s",
+                        real_ms // 1000, path.name)
+            return False
+        return True
 
     @staticmethod
     def _best_direct_audio_format(info: dict) -> dict | None:

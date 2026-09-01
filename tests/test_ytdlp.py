@@ -58,6 +58,107 @@ def test_pick_empty_entries(tmp_path):
     assert e._pick_ytdlp_candidate(_track(), []) is None
 
 
+def test_pick_prefers_original_over_bgm(tmp_path):
+    """同标题下优先原曲，跳过 BGM 版本。"""
+    e = _engine(tmp_path)
+    entries = [
+        {"id": "bgm", "title": "周杰伦 - 晴天 (BGM)", "duration": 260},
+        {"id": "orig", "title": "周杰伦 - 晴天", "duration": 260},
+    ]
+    hit = e._pick_ytdlp_candidate(_track(), entries)
+    assert hit["id"] == "orig"
+
+
+def test_pick_rejects_instrumental_only(tmp_path):
+    e = _engine(tmp_path)
+    entries = [{"id": "a", "title": "周杰伦 - 晴天 [Instrumental]", "duration": 260}]
+    assert e._pick_ytdlp_candidate(_track(), entries) is None
+
+
+def test_pick_rejects_banzou(tmp_path):
+    e = _engine(tmp_path)
+    entries = [{"id": "a", "title": "周杰伦 - 晴天 伴奏版", "duration": 260}]
+    assert e._pick_ytdlp_candidate(_track(), entries) is None
+
+
+def test_validate_duration_rejects_truncated(tmp_path, monkeypatch):
+    """期望 260s，实际 30s（<80%）→ 判截断拒收。"""
+    e = _engine(tmp_path)
+    p = tmp_path / "x.m4a"
+    p.write_bytes(b"z")
+    monkeypatch.setattr("app.downloader.sniff_duration_ms", lambda path: 30 * 1000)
+    assert e._validate_duration(p, _track()) is False
+
+
+def test_validate_duration_rejects_too_long(tmp_path, monkeypatch):
+    """期望 260s，实际 500s（>150%）→ 判错误视频拒收。"""
+    e = _engine(tmp_path)
+    p = tmp_path / "x.m4a"
+    p.write_bytes(b"z")
+    monkeypatch.setattr("app.downloader.sniff_duration_ms", lambda path: 500 * 1000)
+    assert e._validate_duration(p, _track()) is False
+
+
+def test_validate_duration_ok(tmp_path, monkeypatch):
+    """期望 260s，实际 255s → 通过。"""
+    e = _engine(tmp_path)
+    p = tmp_path / "x.m4a"
+    p.write_bytes(b"z")
+    monkeypatch.setattr("app.downloader.sniff_duration_ms", lambda path: 255 * 1000)
+    assert e._validate_duration(p, _track()) is True
+
+
+def test_validate_duration_floor_when_unknown(tmp_path, monkeypatch):
+    """期望时长未知，实际 20s（<40s 下限）→ 拒收。"""
+    e = _engine(tmp_path)
+    p = tmp_path / "x.m4a"
+    p.write_bytes(b"z")
+    monkeypatch.setattr("app.downloader.sniff_duration_ms", lambda path: 20 * 1000)
+    track = Track(title="晴天", artists=["周杰伦"], duration_ms=0)
+    assert e._validate_duration(p, track) is False
+
+
+def test_validate_duration_floor_passes(tmp_path, monkeypatch):
+    """期望时长未知，实际 200s（>40s）→ 通过。"""
+    e = _engine(tmp_path)
+    p = tmp_path / "x.m4a"
+    p.write_bytes(b"z")
+    monkeypatch.setattr("app.downloader.sniff_duration_ms", lambda path: 200 * 1000)
+    track = Track(title="晴天", artists=["周杰伦"], duration_ms=0)
+    assert e._validate_duration(p, track) is True
+
+
+def test_validate_duration_unreadable_passes(tmp_path, monkeypatch):
+    """读不到时长 → 放行（不阻断）。"""
+    e = _engine(tmp_path)
+    p = tmp_path / "x.m4a"
+    p.write_bytes(b"z")
+    monkeypatch.setattr("app.downloader.sniff_duration_ms", lambda path: 0)
+    assert e._validate_duration(p, _track()) is True
+
+
+def test_download_falls_through_on_truncated(tmp_path, monkeypatch):
+    """ytdlp 产物被时长校验拒收后，删除并落下一源。"""
+    e = MusicDLEngine(["ytdlp", "netease"], tmp_path / "w")
+    bad = tmp_path / "w" / "bad.m4a"
+    good = tmp_path / "w" / "good.mp3"
+    bad.write_bytes(b"z")
+    good.write_bytes(b"z")
+
+    def fake_download(track, source):
+        return bad if source == "ytdlp" else good
+
+    def fake_sniff(path):
+        return 30 * 1000 if path == bad else 255 * 1000
+
+    monkeypatch.setattr(e, "_download_from_source", fake_download)
+    monkeypatch.setattr("app.downloader.sniff_duration_ms", fake_sniff)
+    path, src = e.download(_track())
+    assert src == "netease"
+    assert path == good
+    assert not bad.exists(), "被拒收的截断文件应被删除"
+
+
 def test_download_ytdlp_flow(tmp_path, monkeypatch):
     e = _engine(tmp_path)
 
