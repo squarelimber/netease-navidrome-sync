@@ -196,6 +196,7 @@ PAGE = r"""<!DOCTYPE html>
   td .t { color:var(--txt); } td .a { color:var(--dim); }
   .num { font:12px/1.6 var(--mono); font-variant-numeric:tabular-nums; }
   .tag { font:11px/1 var(--mono); color:var(--src); letter-spacing:1px; }
+  .tag.q { color:var(--ok); }
   .spill { display:inline-block; font:11px/1.9 var(--mono); letter-spacing:.5px;
     border:1px solid var(--line2); border-radius:2px; padding:1px 8px; margin:1px 4px 2px 0; color:var(--dim); }
   .spill.ok { color:var(--ok); border-color:rgba(132,169,140,.4); }
@@ -382,7 +383,7 @@ PAGE = r"""<!DOCTYPE html>
 
 <script>
 const fmt = ts => ts ? new Date(ts*1000).toLocaleString('zh-CN',{hour12:false}) : '—';
-let autoRefresh = true, qrTimer = null, gateDone = false;
+let autoRefresh = true, qrTimer = null, gateDone = false, _pollTimer = null;
 
 async function api(path) { return (await fetch(path)).json(); }
 
@@ -473,7 +474,7 @@ async function load() {
   document.getElementById('cleanup-btn').disabled = st.running;
   document.getElementById('scrobble-btn').disabled = st.running;
   document.getElementById('stop-btn').classList.toggle('hide', !st.running);
-  document.getElementById('run-state').textContent = st.running ? '正在下载…' : '';
+  document.getElementById('run-state').textContent = st.running ? (st.progress || '正在处理…') : '';
 
   const stats = await api('/api/stats');
   document.getElementById('stats').innerHTML =
@@ -491,9 +492,10 @@ async function load() {
 
   const dl = await api('/api/tracks?status=downloaded&limit=200');
   document.getElementById('downloaded').innerHTML =
-    '<tr><th>曲目</th><th>歌单</th><th>来源</th></tr>' + dl.map(t =>
+    '<tr><th>曲目</th><th>歌单</th><th>音质</th><th>来源</th></tr>' + dl.map(t =>
       `<tr><td><span class="t">${t.title}</span><br><span class="a">${t.artists.join('/')}</span></td>
        <td class="muted">${t.playlist||'—'}</td>
+       <td><span class="tag q">${t.quality||'—'}</span></td>
        <td><span class="tag">${t.download_source}</span></td></tr>`).join('');
 
   const failed = await api('/api/tracks?status=failed&limit=200');
@@ -505,6 +507,12 @@ async function load() {
        <td class="muted">${t.fail_reason}</td><td class="num">${t.attempts}</td>
        <td class="faint num">${fmt(t.next_retry_at)}</td>
        <td><button class="btn ghost sm" onclick="retry(${t.id})">重试</button></td></tr>`).join('');
+
+  // 递归轮询：运行时 3 秒（进度实时），空闲 30 秒
+  if (autoRefresh) {
+    clearTimeout(_pollTimer);
+    _pollTimer = setTimeout(load, st.running ? 3000 : 30000);
+  }
 }
 
 async function triggerRun() {
@@ -812,7 +820,6 @@ function showModal(html) {
 }
 
 load();
-setInterval(load, 30000);
 </script>
 </body>
 </html>
@@ -889,6 +896,7 @@ def create_app(cfg, db, jobs, scheduler=None):
             "running": jobs._lock.locked(),
             "aborted": jobs.aborted,
             "last_aborted": bool(last_stats.get("aborted")),
+            "progress": getattr(jobs, "progress", ""),
             "scrobble": _scrobble_status(scrobble_stats),
         }
 

@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     next_retry_at REAL,
     file_path TEXT DEFAULT '',         -- 相对 music_dir 的路径
     download_source TEXT DEFAULT '',
+    quality TEXT DEFAULT '',           -- 音质，如 "MP3 320k" / "FLAC" / "AAC 256k"
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -65,7 +66,14 @@ class DB:
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self):
+        """旧库升级：tracks 表缺列时补上（CREATE TABLE IF NOT EXISTS 不会改已有表）。"""
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(tracks)")}
+        if "quality" not in cols:
+            self.conn.execute("ALTER TABLE tracks ADD COLUMN quality TEXT DEFAULT ''")
 
     # ---------- tracks ----------
 
@@ -90,11 +98,11 @@ class DB:
         )
         self.conn.commit()
 
-    def mark_downloaded(self, key, file_path, download_source):
+    def mark_downloaded(self, key, file_path, download_source, quality=""):
         self.conn.execute(
             """UPDATE tracks SET status='downloaded', file_path=?, download_source=?,
-               fail_reason='', next_retry_at=NULL, updated_at=? WHERE key=?""",
-            (file_path, download_source, time.time(), key),
+               quality=?, fail_reason='', next_retry_at=NULL, updated_at=? WHERE key=?""",
+            (file_path, download_source, quality, time.time(), key),
         )
         self.conn.commit()
 

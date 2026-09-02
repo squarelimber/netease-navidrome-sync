@@ -692,6 +692,30 @@ def sniff_duration_ms(path: Path) -> int:
     return 0
 
 
+def sniff_quality(path: Path) -> str:
+    """读取音频音质，返回简短标签（如 "MP3 320k" / "FLAC" / "AAC 256k"），失败返回扩展名大写。
+
+    码率用 mutagen 的 info.bitrate（bps）换算成 kbps 并取整到 10；
+    FLAC 是无损，直接标 "FLAC"（带采样率更直观，如 "FLAC 44.1k"）。
+    """
+    ext = path.suffix.lower().lstrip(".")
+    fallback = ext.upper() if ext else "AUDIO"
+    try:
+        if path.suffix.lower() == ".mp3":
+            br = MP3(path).info.bitrate
+            return f"MP3 {max(1, round(br / 1000 / 10) * 10)}k" if br else "MP3"
+        if path.suffix.lower() == ".flac":
+            info = FLAC(path).info
+            sr = round(info.sample_rate / 1000, 1)
+            return f"FLAC {sr}k" if sr else "FLAC"
+        if path.suffix.lower() in (".m4a", ".mp4", ".aac"):
+            br = MP4(path).info.bitrate
+            return f"AAC {max(1, round(br / 1000 / 10) * 10)}k" if br else "AAC"
+    except Exception:
+        pass
+    return fallback
+
+
 def move_file(src: Path, dst: Path) -> Path:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists():

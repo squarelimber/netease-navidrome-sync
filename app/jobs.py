@@ -14,7 +14,7 @@ from pathlib import Path
 from . import matcher
 from .db import DB, SCROBBLE_PENDING_KEY, SCROBBLE_TS_KEY
 from .downloader import (DownloadError, MusicDLEngine, cleanup_dir,
-                         embed_metadata, move_file, sniff_duration_ms)
+                         embed_metadata, move_file, sniff_duration_ms, sniff_quality)
 from .library import SubsonicClient, display_name, write_lrc_sidecar, write_m3u8
 from .api_client import NCMAPIClient
 from .sources.base import Track
@@ -100,6 +100,8 @@ class Jobs:
         self._lock = threading.Lock()
         self._abort = threading.Event()
         self.aborted = False
+        # 当前下载进度（供状态页展示），格式如 "下载 5/29: 歌名"；空闲为 ""
+        self.progress = ""
 
     def stop(self):
         """请求中止正在运行的每日任务（下一首曲目前停止）。"""
@@ -288,9 +290,10 @@ class Jobs:
         write_lrc_sidecar(dest, lyrics_text)
 
         rel_path = str(subdir / filename)
-        self.db.mark_downloaded(key, rel_path, dl_source)
+        quality = sniff_quality(dest)
+        self.db.mark_downloaded(key, rel_path, dl_source, quality)
         self.db.add_playlist_item(playlist, key, position)
-        log.info("[OK][%s] %s", dl_source, filename)
+        log.info("[OK][%s][%s] %s", dl_source, quality, filename)
         return "downloaded"
 
     # ---------- 歌单文件 ----------
@@ -610,11 +613,12 @@ class Jobs:
             due = self.db.due_retries()
             if due:
                 log.info("处理重试队列: %d 首", len(due))
-            for row in due:
+            for i, row in enumerate(due):
                 if self._abort.is_set():
                     self.aborted = True
                     log.warning("收到中止信号，停止重试队列处理")
                     break
+                self.progress = f"重试 {i+1}/{len(due)}: {row['title']}"
                 track = Track(title=row["title"], artists=json.loads(row["artists"]),
                               album=row["album"], ncm_id=row["ncm_id"],
                               origin=row["origin"], playlist=row["playlist"])
@@ -661,11 +665,13 @@ class Jobs:
             capped = self._aggregate_discover(discover_tracks)
 
             # 4. 下载处理
-            for t in pending_sync + capped:
+            todo = pending_sync + capped
+            for i, t in enumerate(todo):
                 if self._abort.is_set():
                     self.aborted = True
                     log.warning("收到中止信号，停止下载处理")
                     break
+                self.progress = f"下载 {i+1}/{len(todo)}: {t.title}"
                 result = self._process_one(t, positions.get((t.playlist, track_key(t.artists, t.title)), 0))
                 stats[result] = stats.get(result, 0) + 1
                 if result in ("downloaded", "existed", "skipped"):
@@ -694,6 +700,7 @@ class Jobs:
             self.db.run_finish(run_id, stats)
             self._lock.release()
             self._cleanup_tmp()
+            self.progress = ""
 
 
 def _merge_lrc(olrc: str | None, tlrc: str | None) -> str | None:
