@@ -36,6 +36,8 @@ _AUTO_PLAYLIST_PATTERNS = (
     re.compile(r"^ListenBrainz-CF-(\d{4}-\d{2}-\d{2})$"),
     re.compile(r"^LastFM-推荐-(\d{4}-\d{2}-\d{2})$"),
 )
+# 打卡连续失败超过该天数即放弃（移出 pending 不再重试），避免僵尸条目反复打卡
+SCROBBLE_GIVEUP_DAYS = 2
 
 
 def _automatic_playlist_date(name: str) -> datetime.date | None:
@@ -429,14 +431,31 @@ class Jobs:
             return {"ok": False, "msg": "网易云 API 暂时不可用，无法校验 Cookie"}
 
         last_ts = float(self.db.get_property(SCROBBLE_TS_KEY, "0"))
+        # pending: {listen_key: 首次失败时间戳}。连续失败超过 SCROBBLE_GIVEUP_DAYS
+        # 的歌不再重试（移出 pending，等于丢进失败列表），避免僵尸条目反复打卡。
+        # 兼容旧格式（纯字符串列表）：视为"刚失败"。
+        now = time.time()
         try:
-            pending = set(json.loads(self.db.get_property(SCROBBLE_PENDING_KEY, "[]")))
+            raw_pending = json.loads(self.db.get_property(SCROBBLE_PENDING_KEY, "[]"))
         except (TypeError, ValueError):
-            pending = set()
+            raw_pending = []
+        pending: dict[str, float] = {}
+        if isinstance(raw_pending, dict):
+            # 新格式：{listen_key: 首次失败时间戳}
+            for k, v in raw_pending.items():
+                try:
+                    pending[str(k)] = float(v)
+                except (TypeError, ValueError):
+                    pending[str(k)] = now
+        else:
+            # 旧格式：纯字符串列表（视为刚失败）
+            for item in raw_pending:
+                if isinstance(item, str):
+                    pending[item] = now
         pending_times = []
-        for item in pending:
+        for listen_key in pending:
             try:
-                pending_times.append(float(item.split("|", 1)[0]))
+                pending_times.append(float(listen_key.split("|", 1)[0]))
             except (ValueError, IndexError):
                 continue
         fetch_ts = min([last_ts, *(t - 1 for t in pending_times)]) if pending_times else last_ts
@@ -466,8 +485,15 @@ class Jobs:
 
         success, fail, max_ts = 0, 0, last_ts
         songs = []  # 成功打卡的歌（供状态页/最近播放比对）
+        giveup_cutoff = now - SCROBBLE_GIVEUP_DAYS * 86400
         for l in listens:
             listen_key = f"{l['listened_at']}|{l['artist']}|{l['title']}"
+            # 连续失败超过 SCROBBLE_GIVEUP_DAYS 天 → 放弃，移出 pending 不再重试
+            if listen_key in pending and pending[listen_key] <= giveup_cutoff:
+                del pending[listen_key]
+                log.info("打卡放弃: %s - %s（连续失败超 %d 天，不再重试）",
+                         l["artist"], l["title"], SCROBBLE_GIVEUP_DAYS)
+                continue
             if l["listened_at"] <= last_ts and listen_key not in pending:
                 continue
             try:
@@ -500,11 +526,11 @@ class Jobs:
                             max_ts = l["listened_at"]
                     else:
                         fail += 1
-                        pending.add(listen_key)
+                        pending.setdefault(listen_key, now)
                         log.info("打卡失败: %s - %s（网易云返回非 200，下次重试）",
                                  l["artist"], l["title"])
                         continue
-                    pending.discard(listen_key)
+                    pending.pop(listen_key, None)
                     continue
                 # 2) 库内没有，搜索网易云
                 self.scrobble_limiter.wait()
@@ -520,7 +546,7 @@ class Jobs:
                                              self.cfg.title_threshold - 5, self.cfg.max_duration_diff + 5)
                 if not hit:
                     fail += 1
-                    pending.add(listen_key)
+                    pending.setdefault(listen_key, now)
                     log.info("打卡失败: %s - %s（搜索无匹配，下次重试）",
                              l["artist"], l["title"])
                     continue
@@ -536,20 +562,21 @@ class Jobs:
                         max_ts = l["listened_at"]
                 else:
                     fail += 1
-                    pending.add(listen_key)
+                    pending.setdefault(listen_key, now)
                     log.info("打卡失败: %s - %s（网易云返回非 200，下次重试）",
                              l["artist"], l["title"])
                     continue
-                pending.discard(listen_key)
+                pending.pop(listen_key, None)
             except Exception as e:
                 log.info("打卡失败: %s - %s（%s: %s，下次重试）",
                          l["artist"], l["title"], type(e).__name__, e)
                 fail += 1
-                pending.add(listen_key)
+                pending.setdefault(listen_key, now)
 
         if max_ts > last_ts:
             self.db.set_property(SCROBBLE_TS_KEY, str(max_ts))
-        self.db.set_property(SCROBBLE_PENDING_KEY, json.dumps(sorted(pending), ensure_ascii=False))
+        # pending 是 {listen_key: 首次失败时间戳}，直接存 JSON 对象
+        self.db.set_property(SCROBBLE_PENDING_KEY, json.dumps(pending, ensure_ascii=False))
         skipped = len(listens) - success - fail
         log.info("听歌回传: %d 成功, %d 失败（跳过 %d 首）", success, fail, skipped)
         return {"ok": fail == 0, "count": success,

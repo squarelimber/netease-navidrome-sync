@@ -6,6 +6,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import datetime
+import json
+import time
 import types
 
 from app.jobs import Jobs, _merge_lrc
@@ -384,3 +386,70 @@ def test_scrobble_slash_split_artist_matches_key(monkeypatch):
     assert ncm.search_calls == []
     assert ncm.scrobble_calls == [(lib_ncm_id, 260000)]
     assert result["ok"] is True and result["count"] == 1
+
+
+def _scrobble_jobs_with_pending(pending, listens, ncm):
+    """_scrobble_jobs 变体：预设 SCROBBLE_PENDING_KEY。"""
+    from app.db import SCROBBLE_PENDING_KEY
+    jobs = _scrobble_jobs([], listens, ncm)
+    jobs.db._props[SCROBBLE_PENDING_KEY] = json.dumps(pending, ensure_ascii=False)
+    return jobs
+
+
+def test_scrobble_gives_up_after_2_days(monkeypatch):
+    """连续失败超过 2 天的歌 → 放弃，移出 pending，不再搜索/打卡。"""
+    from app import jobs as jobs_mod
+    from app.db import SCROBBLE_PENDING_KEY
+    old_ts = time.time() - 3 * 86400  # 3 天前首次失败
+    listen_key = "1000|某歌手|某歌"
+    listens = [{"listened_at": 1000, "artist": "某歌手", "title": "某歌",
+                "duration_ms": 200000}]
+    monkeypatch.setattr(jobs_mod, "get_recent_listens",
+                        lambda username, min_ts=0: listens)
+    ncm = _RecNCM()  # 搜索无结果
+    jobs = _scrobble_jobs_with_pending({listen_key: old_ts}, listens, ncm)
+    Jobs._scrobble_recent(jobs)
+    saved = json.loads(jobs.db._props[SCROBBLE_PENDING_KEY])
+    assert listen_key not in saved, "超 2 天失败的歌应被放弃、移出 pending"
+    assert ncm.search_calls == [], "放弃的歌不应再搜索"
+    assert ncm.scrobble_calls == [], "放弃的歌不应再打卡"
+
+
+def test_scrobble_retries_within_2_days(monkeypatch):
+    """连续失败不足 2 天 → 仍重试（保留在 pending）。"""
+    from app import jobs as jobs_mod
+    from app.db import SCROBBLE_PENDING_KEY
+    recent_ts = time.time() - 1 * 86400  # 1 天前首次失败
+    listen_key = "1000|某歌手|某歌"
+    listens = [{"listened_at": 1000, "artist": "某歌手", "title": "某歌",
+                "duration_ms": 200000}]
+    monkeypatch.setattr(jobs_mod, "get_recent_listens",
+                        lambda username, min_ts=0: listens)
+    ncm = _RecNCM()  # 搜索无结果 → 仍失败
+    jobs = _scrobble_jobs_with_pending({listen_key: recent_ts}, listens, ncm)
+    Jobs._scrobble_recent(jobs)
+    saved = json.loads(jobs.db._props[SCROBBLE_PENDING_KEY])
+    assert listen_key in saved, "不足 2 天失败的歌应保留在 pending 重试"
+    assert len(ncm.search_calls) == 1, "应重试搜索"
+    # 首次失败时间保持不变（不重置）
+    assert saved[listen_key] == recent_ts
+
+
+def test_scrobble_pending_migrates_old_string_format(monkeypatch):
+    """旧格式 pending（纯字符串列表）→ 迁移为 dict，视为刚失败。"""
+    from app import jobs as jobs_mod
+    from app.db import SCROBBLE_PENDING_KEY
+    listen_key = "1000|某歌手|某歌"
+    listens = [{"listened_at": 1000, "artist": "某歌手", "title": "某歌",
+                "duration_ms": 200000}]
+    monkeypatch.setattr(jobs_mod, "get_recent_listens",
+                        lambda username, min_ts=0: listens)
+    ncm = _RecNCM()
+    jobs = _scrobble_jobs([], listens, ncm)
+    # 旧格式：纯字符串列表
+    jobs.db._props[SCROBBLE_PENDING_KEY] = json.dumps([listen_key])
+    Jobs._scrobble_recent(jobs)
+    saved = json.loads(jobs.db._props[SCROBBLE_PENDING_KEY])
+    # 迁移后是 dict；该歌 1 天前（旧格式视为刚失败）不足 2 天，仍保留重试
+    assert isinstance(saved, dict)
+    assert listen_key in saved
