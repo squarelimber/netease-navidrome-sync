@@ -269,3 +269,118 @@ def test_cleanup_returns_stats_for_web_button(tmp_path):
     stats = _cleanup_fn(tmp_path, db, sub)()
 
     assert stats == {"candidates": 1, "navi_deleted": 1, "files_deleted": 1}
+
+
+# ---- 打卡（scrobble）复用库内 ncm_id ----
+
+def _scrobble_jobs(lib_rows, listens, ncm):
+    """搭最小 Jobs 对象跑 _scrobble_recent。lib_rows: list_tracks 返回；listens: LB 播放。"""
+    import types
+
+    class _DB:
+        def __init__(self, rows):
+            self._rows = rows
+            self._props = {}
+        def get_property(self, key, default=""):
+            return self._props.get(key, default)
+        def set_property(self, key, value):
+            self._props[key] = value
+        def list_tracks(self, status=None, limit=200):
+            return self._rows
+
+    jobs = types.SimpleNamespace()
+    jobs.cfg = types.SimpleNamespace(
+        sources={"listenbrainz": types.SimpleNamespace(
+            enabled=True, extra={"username": "chococake"})},
+        title_threshold=85, max_duration_diff=12,
+    )
+    jobs.last_cookie_ok = True
+    jobs.db = _DB(lib_rows)
+    jobs.ncm = ncm
+    jobs.scrobble_limiter = types.SimpleNamespace(wait=lambda: None)
+    return jobs
+
+
+class _RecNCM:
+    def __init__(self, search_results=None):
+        self.search_calls = []
+        self.scrobble_calls = []
+        self._search_results = search_results or []
+    def search(self, keyword, limit=5):
+        self.search_calls.append(keyword)
+        return self._search_results
+    def scrobble(self, ncm_id, time_ms):
+        self.scrobble_calls.append((ncm_id, time_ms))
+        return True
+
+
+def test_scrobble_uses_library_ncm_id(monkeypatch):
+    """库内已下载（有 ncm_id）的歌：打卡直接复用，不搜索网易云。"""
+    from app import jobs as jobs_mod
+    lib_artist, lib_title, lib_ncm_id = "周杰伦", "东风破", 99999
+    lib_key = track_key([lib_artist], lib_title)
+    lib_rows = [{"key": lib_key, "title": lib_title, "ncm_id": lib_ncm_id,
+                 "status": "downloaded"}]
+    listens = [{"listened_at": 1000, "artist": lib_artist, "title": lib_title,
+                "duration_ms": 260000}]
+    monkeypatch.setattr(jobs_mod, "get_recent_listens",
+                        lambda username, min_ts=0: listens)
+    ncm = _RecNCM()
+    jobs = _scrobble_jobs(lib_rows, listens, ncm)
+    result = Jobs._scrobble_recent(jobs)
+    assert ncm.search_calls == [], "库内命中不应再搜索网易云"
+    assert ncm.scrobble_calls == [(lib_ncm_id, 260000)]
+    assert result["ok"] is True and result["count"] == 1 and result["fail"] == 0
+
+
+def test_scrobble_title_fallback_when_artist_differs(monkeypatch):
+    """artist 完全对不上（key 拆不出库内首艺术家）但标题库内唯一 → 标题兜底命中。"""
+    from app import jobs as jobs_mod
+    lib_title, lib_ncm_id = "东风破", 88888
+    # 库里 artist 是"周杰伦"，LB 播放 artist 是英文名"Jay Chou"（key 怎么拆都对不上）
+    lib_rows = [{"key": track_key(["周杰伦"], lib_title), "title": lib_title,
+                 "ncm_id": lib_ncm_id, "status": "downloaded"}]
+    listens = [{"listened_at": 1000, "artist": "Jay Chou", "title": lib_title,
+                "duration_ms": 260000}]
+    monkeypatch.setattr(jobs_mod, "get_recent_listens",
+                        lambda username, min_ts=0: listens)
+    ncm = _RecNCM()
+    jobs = _scrobble_jobs(lib_rows, listens, ncm)
+    result = Jobs._scrobble_recent(jobs)
+    assert ncm.search_calls == [], "标题唯一兜底命中不应再搜索"
+    assert ncm.scrobble_calls == [(lib_ncm_id, 260000)]
+    assert result["ok"] is True and result["count"] == 1
+
+
+def test_scrobble_falls_back_to_search_when_not_in_library(monkeypatch):
+    """库内没有的歌 → 仍走网易云搜索。"""
+    from app import jobs as jobs_mod
+    listens = [{"listened_at": 1000, "artist": "某新人", "title": "未知之歌",
+                "duration_ms": 200000}]
+    monkeypatch.setattr(jobs_mod, "get_recent_listens",
+                        lambda username, min_ts=0: listens)
+    ncm = _RecNCM(search_results=[{"id": 555, "name": "未知之歌",
+                                   "artists": ["某新人"], "duration_s": 200}])
+    jobs = _scrobble_jobs([], listens, ncm)  # 库内为空
+    result = Jobs._scrobble_recent(jobs)
+    assert len(ncm.search_calls) == 1, "库内没有应走搜索"
+    assert ncm.scrobble_calls == [(555, 200000)]
+    assert result["ok"] is True and result["count"] == 1
+
+
+def test_scrobble_slash_split_artist_matches_key(monkeypatch):
+    """LB artist 是 '周杰伦/A-LNK'，库里首艺术家是'周杰伦' → 按 '/' 拆分命中 key。"""
+    from app import jobs as jobs_mod
+    lib_title, lib_ncm_id = "东风破", 77777
+    lib_rows = [{"key": track_key(["周杰伦"], lib_title), "title": lib_title,
+                 "ncm_id": lib_ncm_id, "status": "downloaded"}]
+    listens = [{"listened_at": 1000, "artist": "周杰伦/A-LNK", "title": lib_title,
+                "duration_ms": 260000}]
+    monkeypatch.setattr(jobs_mod, "get_recent_listens",
+                        lambda username, min_ts=0: listens)
+    ncm = _RecNCM()
+    jobs = _scrobble_jobs(lib_rows, listens, ncm)
+    result = Jobs._scrobble_recent(jobs)
+    assert ncm.search_calls == []
+    assert ncm.scrobble_calls == [(lib_ncm_id, 260000)]
+    assert result["ok"] is True and result["count"] == 1

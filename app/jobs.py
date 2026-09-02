@@ -22,7 +22,7 @@ from .sources.lastfm import LastFmSource
 from .sources.listenbrainz import ListenBrainzSource, get_recent_listens
 from .sources.netease_daily import NeteaseDailySource
 from .sources.netease_playlist import NeteasePlaylistSource
-from .util import RateLimiter, safe_name, track_key
+from .util import RateLimiter, normalize, safe_name, track_key
 
 log = logging.getLogger(__name__)
 
@@ -445,6 +445,25 @@ class Jobs:
         if not listens:
             return {"ok": True, "count": 0, "msg": f"无新记录（上次: {int(last_ts)}）"}
 
+        # 库内 ncm_id 查找表：优先复用已下载曲目的 ncm_id 直接打卡，
+        # 不再重复搜索网易云。否则库里明明有（历史同步成功、今天被跳过）的歌，
+        # 只要网易云搜索接口没命中就会被判"搜索无匹配"失败、反复重试。
+        # 主键用 track_key（首艺术家::标题）；artist 格式不一致时退回"标题唯一"兜底。
+        lib_by_key: dict[str, int] = {}
+        title_counts: dict[str, int] = {}
+        title_ncm: dict[str, int] = {}
+        for row in self.db.list_tracks(limit=20000):
+            ncm_id = row.get("ncm_id")
+            if not ncm_id or row.get("status") not in ("downloaded", "existed"):
+                continue
+            lib_by_key[row["key"]] = ncm_id
+            tnorm = normalize(row["title"])
+            if tnorm:
+                title_counts[tnorm] = title_counts.get(tnorm, 0) + 1
+                title_ncm[tnorm] = ncm_id
+        # 只保留标题在库内唯一的，避免同名不同歌的歧义
+        lib_by_title = {t: n for t, n in title_ncm.items() if title_counts.get(t) == 1}
+
         success, fail, max_ts = 0, 0, last_ts
         songs = []  # 成功打卡的歌（供状态页/最近播放比对）
         for l in listens:
@@ -452,6 +471,42 @@ class Jobs:
             if l["listened_at"] <= last_ts and listen_key not in pending:
                 continue
             try:
+                # 1) 优先复用库内 ncm_id（已下载曲目），命中即直接打卡。
+                #    LB 的 artist 字段格式多变（"周杰伦"、"周杰伦/A-LNK"、"A & B"），
+                #    track_key 只取首艺术家，故按整串 / 按 "/" / 按 "&" 各试一次，
+                #    都 miss 再退回"标题库内唯一"兜底。
+                ncm_id = None
+                for artists in (
+                    [l["artist"]],
+                    [a for a in l["artist"].split("/") if a.strip()],
+                    [a for a in re.split(r"\s*&\s*", l["artist"]) if a.strip()],
+                ):
+                    if artists:
+                        ncm_id = lib_by_key.get(track_key(artists, l["title"]))
+                        if ncm_id:
+                            break
+                if not ncm_id:
+                    ncm_id = lib_by_title.get(normalize(l["title"]))
+                if ncm_id:
+                    time_ms = l.get("duration_ms", 180000) or 180000
+                    self.scrobble_limiter.wait()
+                    if self.ncm.scrobble(ncm_id, time_ms):
+                        success += 1
+                        songs.append({"ncm_id": ncm_id, "artist": l["artist"],
+                                      "title": l["title"]})
+                        log.info("打卡成功(库内): %s - %s (ncm_id=%s)",
+                                 l["artist"], l["title"], ncm_id)
+                        if l["listened_at"] > max_ts:
+                            max_ts = l["listened_at"]
+                    else:
+                        fail += 1
+                        pending.add(listen_key)
+                        log.info("打卡失败: %s - %s（网易云返回非 200，下次重试）",
+                                 l["artist"], l["title"])
+                        continue
+                    pending.discard(listen_key)
+                    continue
+                # 2) 库内没有，搜索网易云
                 self.scrobble_limiter.wait()
                 candidates = self.ncm.search(f"{l['artist']} {l['title']}", limit=5)
                 track = Track(title=l["title"], artists=[l["artist"]],
