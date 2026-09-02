@@ -553,7 +553,8 @@ class Jobs:
         skipped = len(listens) - success - fail
         log.info("听歌回传: %d 成功, %d 失败（跳过 %d 首）", success, fail, skipped)
         return {"ok": fail == 0, "count": success,
-                "fail": fail, "total": len(listens), "songs": songs}
+                "fail": fail, "skipped": skipped,
+                "total": len(listens), "songs": songs}
 
     # ---------- 主流程 ----------
 

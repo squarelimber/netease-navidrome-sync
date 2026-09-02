@@ -23,15 +23,26 @@ log = logging.getLogger(__name__)
 
 
 def _scrobble_status(s: dict) -> str:
+    """打卡状态：新打卡 / 已打卡跳过 / 失败 三段都显示，避免 '8/200' 被误读成
+    '200 首里只成功 8 首'（实际 200 里含大量早已打卡、本次跳过的歌）。"""
     if not s:
         return ""
-    if s.get("ok"):
-        c = s.get("count", 0)
-        return f'<span class="ok">✓ {c} 首</span>' if c else '<span class="muted">0 首</span>'
-    detail = s.get("msg") or ""
-    if not detail and s.get("total") is not None:
-        detail = f'{s.get("count", 0)}/{s["total"]} 成功，{s.get("fail", 0)} 失败'
-    return '<span class="warn">✗ ' + (detail[:30] or "未知原因") + '</span>'
+    if s.get("msg"):
+        # 未真正跑（LB 未启用 / Cookie 无效等）
+        return '<span class="warn">✗ ' + (s["msg"][:30] or "未知原因") + '</span>'
+    count = s.get("count", 0)
+    fail = s.get("fail", 0)
+    skipped = s.get("skipped", 0)
+    if s.get("ok") and not fail:
+        if skipped:
+            return f'<span class="ok">✓ 新 {count} 首（已打卡 {skipped}）</span>'
+        return f'<span class="ok">✓ {count} 首</span>' if count else '<span class="muted">0 首</span>'
+    # 有失败：列清 新 / 已打卡 / 失败
+    parts = [f'新 {count}']
+    if skipped:
+        parts.append(f'已打卡 {skipped}')
+    parts.append(f'失败 {fail}')
+    return '<span class="warn">✗ ' + " / ".join(parts) + '</span>'
 
 
 PAGE = r"""<!DOCTYPE html>

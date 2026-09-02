@@ -90,3 +90,41 @@ def test_reset_watermark_rejects_when_running():
         assert db.get_property(SCROBBLE_TS_KEY) == "1788091147"
     finally:
         jobs._lock.release()
+
+
+# ---- _scrobble_status 显示：新 / 已打卡 / 失败 三段 ----
+
+def test_scrobble_status_ok_with_skipped():
+    from app.web import _scrobble_status
+    html = _scrobble_status({"ok": True, "count": 8, "fail": 0, "skipped": 187, "total": 200})
+    assert "新 8 首" in html and "已打卡 187" in html
+    assert "✗" not in html  # 无失败不应显示失败标记
+
+
+def test_scrobble_status_ok_no_skipped():
+    from app.web import _scrobble_status
+    html = _scrobble_status({"ok": True, "count": 8, "fail": 0, "skipped": 0, "total": 8})
+    assert "✓ 8 首" in html
+    assert "已打卡" not in html
+
+
+def test_scrobble_status_with_failures_shows_breakdown():
+    from app.web import _scrobble_status
+    # 对应日志：8 新 + 187 已打卡 + 5 失败 = 200
+    html = _scrobble_status({"ok": False, "count": 8, "fail": 5, "skipped": 187, "total": 200})
+    assert "新 8" in html and "已打卡 187" in html and "失败 5" in html
+    assert "✗" in html
+    # 不应再出现误导性的 '8/200 成功'
+    assert "8/200" not in html
+
+
+def test_scrobble_status_msg_only():
+    from app.web import _scrobble_status
+    html = _scrobble_status({"ok": False, "msg": "网易云 Cookie 无效"})
+    assert "Cookie 无效" in html and "✗" in html
+
+
+def test_scrobble_status_empty():
+    from app.web import _scrobble_status
+    assert _scrobble_status({}) == ""
+    assert _scrobble_status(None) == ""
