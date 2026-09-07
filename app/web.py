@@ -185,6 +185,10 @@ PAGE = r"""<!DOCTYPE html>
 
   /* ---------- 表格：无边框，行悬停 ---------- */
   .tbl-wrap { max-height:380px; overflow:auto; }
+  .pager { display:flex; align-items:center; gap:6px; margin-top:12px; flex-wrap:wrap; }
+  .pager .btn { min-width:30px; justify-content:center; }
+  .pager .cur { font:11px/2.2 var(--mono); color:var(--accent); letter-spacing:1px; padding:0 6px; }
+  .pager .faint { font:11px/1 var(--mono); margin-left:auto; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th { font:11px/1 var(--mono); color:var(--faint); letter-spacing:1.8px; font-weight:500;
     text-align:left; padding:10px 12px; border-bottom:1px solid var(--line2);
@@ -371,8 +375,9 @@ PAGE = r"""<!DOCTYPE html>
     </div>
 
     <section class="sec">
-      <div class="sec-head"><h2><span class="no">04</span>最近入库</h2></div>
+      <div class="sec-head"><h2><span class="no">04</span>最近入库</h2><span id="dl-meta" class="faint num" style="font-size:11px"></span></div>
       <div class="tbl-wrap"><table id="downloaded"></table></div>
+      <div id="dl-pager" class="pager"></div>
     </section>
   </main>
 </div>
@@ -384,6 +389,8 @@ PAGE = r"""<!DOCTYPE html>
 <script>
 const fmt = ts => ts ? new Date(ts*1000).toLocaleString('zh-CN',{hour12:false}) : '—';
 let autoRefresh = true, qrTimer = null, gateDone = false, _pollTimer = null;
+const DL_PAGE_SIZE = 20;
+let dlPage = 0, dlTotal = 0;
 
 async function api(path) { return (await fetch(path)).json(); }
 
@@ -490,16 +497,10 @@ async function load() {
       `<tr><td class="faint num" style="white-space:nowrap">${fmt(r.started_at)}</td>
        <td class="runline">${runSummary(typeof r.stats==='string'?JSON.parse(r.stats||'{}'):r.stats)}</td></tr>`).join('');
 
-  const dl = await api('/api/tracks?status=downloaded&limit=200');
-  document.getElementById('downloaded').innerHTML =
-    '<tr><th>曲目</th><th>歌单</th><th>音质</th><th>来源</th></tr>' + dl.map(t =>
-      `<tr><td><span class="t">${t.title}</span><br><span class="a">${t.artists.join('/')}</span></td>
-       <td class="muted">${t.playlist||'—'}</td>
-       <td><span class="tag q">${t.quality||'—'}</span></td>
-       <td><span class="tag">${t.download_source}</span></td></tr>`).join('');
+  await loadDownloaded();
 
-  const failed = await api('/api/tracks?status=failed&limit=200');
-  const dead = await api('/api/tracks?status=dead&limit=50');
+  const failed = (await api('/api/tracks?status=failed&limit=200')).rows;
+  const dead = (await api('/api/tracks?status=dead&limit=50')).rows;
   document.getElementById('failed').innerHTML =
     '<tr><th>曲目</th><th>原因</th><th>次数</th><th>下次重试</th><th></th></tr>' +
     failed.concat(dead).map(t =>
@@ -514,6 +515,36 @@ async function load() {
     _pollTimer = setTimeout(load, st.running ? 3000 : 30000);
   }
 }
+
+async function loadDownloaded(page = dlPage) {
+  const r = await api(`/api/tracks?status=downloaded&limit=${DL_PAGE_SIZE}&offset=${page*DL_PAGE_SIZE}`);
+  dlTotal = r.total || 0;
+  const pages = Math.max(1, Math.ceil(dlTotal / DL_PAGE_SIZE));
+  if (page >= pages) page = pages - 1;
+  dlPage = page;
+  const rows = r.rows || [];
+  document.getElementById('downloaded').innerHTML =
+    '<tr><th>曲目</th><th>歌单</th><th>音质</th><th>来源</th></tr>' + rows.map(t =>
+      `<tr><td><span class="t">${t.title}</span><br><span class="a">${t.artists.join('/')}</span></td>
+       <td class="muted">${t.playlist||'—'}</td>
+       <td><span class="tag q">${t.quality||'—'}</span></td>
+       <td><span class="tag">${t.download_source}</span></td></tr>`).join('');
+  document.getElementById('dl-meta').textContent = dlTotal ? `共 ${dlTotal} 首` : '';
+  let html = '';
+  if (pages > 1) {
+    html += `<button class="btn ghost sm" ${page===0?'disabled':''} onclick="goDlPage(${page-1})">‹</button>`;
+    for (let i = 0; i < pages; i++) {
+      html += i === page
+        ? `<span class="cur">${i+1}</span>`
+        : `<button class="btn ghost sm" onclick="goDlPage(${i})">${i+1}</button>`;
+    }
+    html += `<button class="btn ghost sm" ${page>=pages-1?'disabled':''} onclick="goDlPage(${page+1})">›</button>`;
+    html += `<span class="faint">${page+1} / ${pages}</span>`;
+  }
+  document.getElementById('dl-pager').innerHTML = html;
+}
+
+function goDlPage(p) { loadDownloaded(p); }
 
 async function triggerRun() {
   const btn = document.getElementById('run-btn');
@@ -909,14 +940,14 @@ def create_app(cfg, db, jobs, scheduler=None):
         return db.list_runs(10)
 
     @app.get("/api/tracks")
-    def tracks(status: str = "", limit: int = 200):
-        rows = db.list_tracks(status or None, limit)
+    def tracks(status: str = "", limit: int = 200, offset: int = 0):
+        rows = db.list_tracks(status or None, limit, offset)
         for r in rows:
             try:
                 r["artists"] = json.loads(r["artists"])
             except Exception:
                 r["artists"] = [r["artists"]]
-        return rows
+        return {"rows": rows, "total": db.count_tracks(status or None)}
 
     @app.post("/api/run")
     def run_now():

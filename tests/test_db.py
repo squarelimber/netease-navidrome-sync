@@ -36,3 +36,32 @@ def test_delete_playlist_keeps_track(tmp_path):
     assert "LastFM-推荐-2026-08-20" not in db.playlist_names()
     assert db.get_track("a::b")["file_path"] == "Discover/a.mp3"
     db.close()
+
+
+def test_list_tracks_pagination_no_overlap(tmp_path):
+    db = DB(tmp_path / "test.db")
+    for i in range(25):
+        db.upsert_track(f"k{i}::t", f"t{i}", [f"a{i}"])
+        db.mark_downloaded(f"k{i}::t", f"Discover/t{i}.mp3", "kuwo")
+    total = db.count_tracks("downloaded")
+    assert total == 25
+    page1 = db.list_tracks("downloaded", limit=10, offset=0)
+    page2 = db.list_tracks("downloaded", limit=10, offset=10)
+    page3 = db.list_tracks("downloaded", limit=10, offset=20)
+    assert len(page1) == 10 and len(page2) == 10 and len(page3) == 5
+    keys = [r["key"] for r in page1 + page2 + page3]
+    assert len(set(keys)) == 25, "分页之间不应有重叠或遗漏"
+    # offset 越界返回空
+    assert db.list_tracks("downloaded", limit=10, offset=100) == []
+    db.close()
+
+
+def test_count_tracks_by_status(tmp_path):
+    db = DB(tmp_path / "test.db")
+    db.upsert_track("k1::t", "t1", ["a1"])
+    db.mark_downloaded("k1::t", "Discover/t1.mp3", "kuwo")
+    db.upsert_track("k2::t", "t2", ["a2"])  # 仍 pending
+    assert db.count_tracks() == 2
+    assert db.count_tracks("downloaded") == 1
+    assert db.count_tracks("pending") == 1
+    db.close()

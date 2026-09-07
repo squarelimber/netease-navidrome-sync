@@ -148,17 +148,27 @@ class DB:
         )
         self.conn.commit()
 
-    def list_tracks(self, status=None, limit=200):
+    def list_tracks(self, status=None, limit=200, offset=0):
         if status:
             rows = self.conn.execute(
-                "SELECT * FROM tracks WHERE status=? ORDER BY updated_at DESC LIMIT ?",
-                (status, limit),
+                "SELECT * FROM tracks WHERE status=? ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+                (status, limit, offset),
             ).fetchall()
         else:
             rows = self.conn.execute(
-                "SELECT * FROM tracks ORDER BY updated_at DESC LIMIT ?", (limit,)
+                "SELECT * FROM tracks ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def count_tracks(self, status=None):
+        if status:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM tracks WHERE status=?", (status,)
+            ).fetchone()
+        else:
+            row = self.conn.execute("SELECT COUNT(*) FROM tracks").fetchone()
+        return row[0]
 
     def stats(self):
         rows = self.conn.execute(
